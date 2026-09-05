@@ -1,0 +1,24 @@
+{
+  "name": "battleground.io",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "nodemon server/index.js",
+    "dev:all": "concurrently -k -n client,server -c cyan,magenta \"npm:dev\" \"npm:dev:server\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "nodemon": "^3.1.14",
+    "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "three": "^0.185.1",
+    "ws": "^8.21.3"
+  }
+}

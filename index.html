@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>battleground.io</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+      #app { position: relative; width: 100vw; height: 100vh; }
+      canvas { display: block; }
+
+      #damage-flash {
+        position: absolute; inset: 0; pointer-events: none;
+        background: radial-gradient(ellipse at center, rgba(140,0,0,0) 40%, rgba(140,0,0,0.55) 100%);
+        opacity: 0; transition: opacity 0.08s ease-out;
+      }
+      #damage-flash.show { opacity: 1; transition: opacity 0s; }
+
+      #crosshair {
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        width: 6px; height: 6px; border-radius: 50%;
+        background: rgba(255,255,255,0.9);
+        box-shadow: 0 0 0 1px rgba(0,0,0,0.6);
+        pointer-events: none;
+      }
+
+      #hud {
+        position: absolute; left: 16px; bottom: 16px; color: #fff;
+        font: 600 16px/1.4 system-ui, sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        pointer-events: none; user-select: none;
+      }
+      #hud .health { font-size: 22px; }
+      #hud .money { font-size: 15px; color: #2fe0c4; margin-top: 2px; }
+      #ammo-hud {
+        position: absolute; right: 16px; bottom: 16px; color: #fff; text-align: right;
+        font: 700 26px/1.1 system-ui, sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        pointer-events: none; user-select: none;
+      }
+      #ammo-hud .weapon-name {
+        font: 600 12px system-ui, sans-serif; color: #93b8b4; letter-spacing: 1px;
+        text-transform: uppercase; margin-bottom: 2px;
+      }
+      #scoreboard {
+        position: absolute; right: 16px; top: 16px; color: #fff;
+        font: 500 14px/1.5 system-ui, sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        pointer-events: none; user-select: none; text-align: right;
+      }
+      #killfeed {
+        position: absolute; right: 16px; top: 90px; color: #fff;
+        font: 500 13px/1.6 system-ui, sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        pointer-events: none; user-select: none; text-align: right;
+        display: flex; flex-direction: column; gap: 2px;
+      }
+
+      #overlay {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        flex-direction: column; gap: 18px; color: #fff; text-align: center; cursor: pointer;
+        background:
+          radial-gradient(ellipse at center, rgba(10,14,18,0.35) 0%, rgba(6,9,12,0.88) 75%),
+          linear-gradient(160deg, #0d3b3a 0%, #0a1418 55%, #1a0d0f 100%);
+        font: 500 16px system-ui, sans-serif;
+      }
+      #overlay.hidden { display: none; }
+      #overlay .brand {
+        display: flex; flex-direction: column; align-items: center; gap: 4px;
+      }
+      #overlay h1 {
+        margin: 0; font-size: 54px; letter-spacing: 6px; font-weight: 800;
+        color: #eafffb; text-shadow: 0 0 18px rgba(47,224,196,0.75), 0 0 46px rgba(47,224,196,0.35);
+      }
+      #overlay .tagline {
+        font-size: 12px; letter-spacing: 5px; text-transform: uppercase; color: #ff5a5a;
+        text-shadow: 0 0 10px rgba(255,90,90,0.6);
+      }
+      #overlay .deploy-prompt {
+        margin-top: 6px; padding: 10px 28px; border: 1px solid rgba(47,224,196,0.5);
+        border-radius: 2px; font: 700 13px system-ui, sans-serif; letter-spacing: 3px;
+        text-transform: uppercase; color: #2fe0c4; background: rgba(47,224,196,0.08);
+        animation: pulseGlow 1.8s ease-in-out infinite;
+      }
+      @keyframes pulseGlow {
+        0%, 100% { box-shadow: 0 0 6px rgba(47,224,196,0.25); }
+        50% { box-shadow: 0 0 18px rgba(47,224,196,0.6); }
+      }
+      #overlay .controls {
+        margin-top: 10px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+        max-width: 520px;
+      }
+      #overlay .key {
+        font-size: 12px; color: #cfe9e6; background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.12); border-radius: 3px; padding: 5px 10px;
+      }
+      #overlay .key b { color: #2fe0c4; }
+
+      #respawn {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        flex-direction: column; gap: 8px; background: rgba(120,0,0,0.35); color: #fff;
+        font: 600 22px system-ui, sans-serif;
+      }
+      #respawn.show { display: flex; }
+
+      #lobby-hint {
+        position: absolute; top: 14%; left: 50%; transform: translateX(-50%);
+        color: #eafeff; font: 600 18px/1.4 system-ui, sans-serif; text-align: center;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.85); pointer-events: none; user-select: none;
+      }
+      #lobby-hint.hidden { display: none; }
+
+      #shop-hint {
+        position: absolute; bottom: 22%; left: 50%; transform: translateX(-50%);
+        color: #fff; font: 600 15px system-ui, sans-serif; text-align: center;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.85); pointer-events: none; user-select: none;
+      }
+      #shop-hint.hidden { display: none; }
+      #shop-hint b { color: #2fe0c4; }
+
+      #shop {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(4,8,10,0.72);
+      }
+      #shop.show { display: flex; }
+      #shop-panel {
+        width: min(560px, 90vw); background: linear-gradient(160deg, #101a1c 0%, #0b1214 100%);
+        border: 1px solid rgba(47,224,196,0.35); border-radius: 6px; padding: 20px 24px 24px;
+        color: #eafffb; font: 500 14px system-ui, sans-serif; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      }
+      #shop-panel h2 {
+        margin: 0 0 2px; font: 800 22px system-ui, sans-serif; letter-spacing: 2px; color: #fff;
+      }
+      #shop-panel .shop-sub { color: #7fa8a4; font-size: 12px; margin-bottom: 14px; }
+      .shop-section-label {
+        font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #ff5a5a;
+        margin: 14px 0 6px;
+      }
+      .shop-item {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        padding: 10px 12px; border-radius: 4px; background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.06); margin-bottom: 6px; cursor: pointer;
+        transition: background 0.12s;
+      }
+      .shop-item:hover:not(.disabled):not(.equipped) { background: rgba(47,224,196,0.1); }
+      .shop-item .name { font-weight: 600; }
+      .shop-item .stats { font-size: 11px; color: #93b8b4; }
+      .shop-item .cost { font-weight: 700; color: #2fe0c4; min-width: 60px; text-align: right; }
+      .shop-item.equipped { border-color: rgba(47,224,196,0.6); background: rgba(47,224,196,0.08); cursor: default; }
+      .shop-item.equipped .cost { color: #7fa8a4; }
+      .shop-item.disabled { opacity: 0.45; cursor: not-allowed; }
+      #shop-close {
+        margin-top: 16px; width: 100%; padding: 10px; border-radius: 4px; text-align: center;
+        border: 1px solid rgba(255,255,255,0.15); color: #cfe9e6; font: 600 12px system-ui, sans-serif;
+        letter-spacing: 2px; text-transform: uppercase; cursor: pointer;
+      }
+      #shop-close:hover { background: rgba(255,255,255,0.06); }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="damage-flash"></div>
+      <div id="crosshair"></div>
+      <div id="hud">
+        <div class="health" id="health">100 HP</div>
+        <div class="money" id="money">$800</div>
+      </div>
+      <div id="ammo-hud">
+        <div class="weapon-name" id="weapon-name">Rifle</div>
+        <div id="ammo">30 / 90</div>
+      </div>
+      <div id="scoreboard"></div>
+      <div id="killfeed"></div>
+      <div id="lobby-hint">Walk into the glowing portal to deploy into the battleground</div>
+      <div id="shop-hint">Press <b>B</b> to open the shop</div>
+      <div id="respawn">
+        <div>You died</div>
+        <div id="respawn-timer" style="font-size:14px; opacity:0.8;"></div>
+      </div>
+      <div id="shop">
+        <div id="shop-panel">
+          <h2>ARMORY</h2>
+          <div class="shop-sub">Buy phase only &middot; available while in the lobby</div>
+          <div id="shop-items"></div>
+          <div id="shop-close">Close [B]</div>
+        </div>
+      </div>
+      <div id="overlay">
+        <div class="brand">
+          <h1>BATTLEGROUND.IO</h1>
+          <div class="tagline">Tactical Deployment Zone</div>
+        </div>
+        <div class="deploy-prompt">Click to deploy</div>
+        <div class="controls">
+          <div class="key"><b>WASD</b> move</div>
+          <div class="key"><b>Mouse</b> look</div>
+          <div class="key"><b>Click</b> shoot</div>
+          <div class="key"><b>Space</b> jump</div>
+          <div class="key"><b>Ctrl/C</b> crouch &amp; slide</div>
+          <div class="key"><b>R</b> reload</div>
+          <div class="key"><b>F4</b> third person</div>
+          <div class="key"><b>B</b> shop (in lobby)</div>
+          <div class="key"><b>Esc</b> release cursor</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
