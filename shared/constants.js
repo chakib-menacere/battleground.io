@@ -23,6 +23,11 @@ export const DEFAULT_WEAPON_ID = 'rifle';
 export const ARMOR_COST = 650;
 export const ARMOR_DAMAGE_REDUCTION = 0.25; // fraction of incoming damage absorbed
 
+// The knife is a free secondary slot every player always has — no purchase, no ammo, no
+// reload. Key 1 selects the primary (purchased) weapon, key 2 selects this.
+export const KNIFE_WEAPON = { id: 'knife', name: 'Knife', damage: 55, fireCooldownMs: 500, range: 2.2, stabCooldownMs: 700 };
+export const DEFAULT_SLOT = 'primary';
+
 // Ammo: each weapon has its own magazine; reloading refills it from a reserve pool sized as
 // a multiple of the mag. Switching weapons (a new purchase) resets both to full.
 export const RESERVE_MAG_MULTIPLIER = 3;
@@ -167,5 +172,8 @@ export const MSG = {
   LOADOUT: 'loadout',
   AMMO: 'ammo',
   RELOAD: 'reload',
+  SWITCH: 'switch',
+  STAB: 'stab',
+  BACKSTAB: 'backstab',
   CRATE: 'crate',
 };

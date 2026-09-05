@@ -36,6 +36,8 @@ import {
   AMMO_CRATES,
   AMMO_CRATE_RADIUS,
   AMMO_CRATE_RESPAWN_MS,
+  KNIFE_WEAPON,
+  DEFAULT_SLOT,
   MSG,
 } from '../shared/constants.js';
 import { createMovementState, stepMovement, applyJump, applySlideStart, computeWorldDir } from '../shared/movement.js';
@@ -82,7 +84,9 @@ class Player {
     this.money = STARTING_MONEY;
     this.weaponId = DEFAULT_WEAPON_ID;
     this.armor = false;
+    this.activeSlot = DEFAULT_SLOT; // 'primary' (purchased gun) or 'secondary' (knife)
     this.lastShotAt = 0;
+    this.lastStabAt = 0;
     this.input = { forward: 0, right: 0, crouch: false };
     this.move = createMovementState();
     const startWeapon = SHOP_WEAPONS.find((w) => w.id === DEFAULT_WEAPON_ID);
@@ -94,6 +98,12 @@ class Player {
 
 function getWeapon(id) {
   return SHOP_WEAPONS.find((w) => w.id === id) || SHOP_WEAPONS[0];
+}
+
+// The knife (secondary slot) is free, has no ammo/reload, and isn't in SHOP_WEAPONS since
+// it's never purchased — every player always has it.
+function getActiveWeapon(player) {
+  return player.activeSlot === 'secondary' ? KNIFE_WEAPON : getWeapon(player.weaponId);
 }
 
 // Buying a new weapon (or spawning with the default one) refills both the mag and reserve.
@@ -151,57 +161,6 @@ function collidesWithCover(x, z, y, radius) {
   return false;
 }
 
-// A stationary-ish wandering target dummy for testing shooting/hit VFX. It has no socket
-// (`ws: null`, guarded in send/broadcast) — its input is driven by updateBotAI() each tick
-// instead of client messages, but otherwise it's a normal Player through the shoot/respawn code.
-function createBot(id, name) {
-  const spawn = randomSpawn();
-  return {
-    id,
-    ws: null,
-    name,
-    x: spawn.x,
-    y: spawn.y,
-    z: spawn.z,
-    yaw: 0,
-    pitch: 0,
-    health: PLAYER_MAX_HEALTH,
-    alive: true,
-    inArena: true,
-    kills: 0,
-    deaths: 0,
-    money: STARTING_MONEY,
-    weaponId: DEFAULT_WEAPON_ID,
-    armor: false,
-    lastShotAt: 0,
-    input: { forward: 0, right: 0, crouch: false },
-    move: createMovementState(),
-    isBot: true,
-    wanderTarget: null,
-  };
-}
-
-function updateBotAI(bot) {
-  if (!bot.alive) {
-    bot.input.forward = 0;
-    bot.input.right = 0;
-    return;
-  }
-  if (!bot.wanderTarget || Math.hypot(bot.x - bot.wanderTarget.x, bot.z - bot.wanderTarget.z) < 2) {
-    const spawn = randomSpawn();
-    bot.wanderTarget = { x: spawn.x, z: spawn.z };
-  }
-  const dx = bot.wanderTarget.x - bot.x;
-  const dz = bot.wanderTarget.z - bot.z;
-  bot.yaw = Math.atan2(-dx, -dz);
-  bot.input.forward = 1;
-  bot.input.right = 0;
-  if (bot.move.grounded && Math.random() < 0.01) applyJump(bot.move);
-}
-
-const bot = createBot('bot1', 'TrainingDummy');
-players.set(bot.id, bot);
-
 // Ammo crates: { id, x, z, active }. Picking one up (see the tick loop) deactivates it and
 // schedules a respawn broadcast after AMMO_CRATE_RESPAWN_MS.
 const crates = AMMO_CRATES.map((c) => ({ ...c, active: true }));
@@ -224,8 +183,9 @@ wss.on('connection', (ws) => {
     self: {
       x: player.x, y: player.y, z: player.z, health: player.health, inArena: player.inArena,
       money: player.money, weaponId: player.weaponId, armor: player.armor,
-      ammo: player.ammo, reserveAmmo: player.reserveAmmo,
+      ammo: player.ammo, reserveAmmo: player.reserveAmmo, activeSlot: player.activeSlot,
     },
+    knife: KNIFE_WEAPON,
     shop: { weapons: SHOP_WEAPONS, armorCost: ARMOR_COST, position: SHOP_POSITION, radius: SHOP_RADIUS },
     crates: serializeCrates(),
     players: [...players.values()].map(serializePublic),
@@ -251,6 +211,8 @@ wss.on('connection', (ws) => {
       if (typeof msg.pitch === 'number') player.pitch = msg.pitch;
     } else if (msg.type === MSG.SHOOT) {
       handleShoot(player);
+    } else if (msg.type === MSG.STAB) {
+      handleStab(player);
     } else if (msg.type === MSG.JUMP) {
       if (player.alive) applyJump(player.move);
     } else if (msg.type === MSG.SLIDE) {
@@ -264,6 +226,13 @@ wss.on('connection', (ws) => {
       handleBuy(player, msg);
     } else if (msg.type === MSG.RELOAD) {
       handleReload(player);
+    } else if (msg.type === MSG.SWITCH) {
+      if (!player.alive) return;
+      const slot = msg.slot === 'secondary' ? 'secondary' : 'primary';
+      if (slot === player.activeSlot) return;
+      player.activeSlot = slot;
+      player.reloading = false;
+      send(player.ws, { type: MSG.SWITCH, slot });
     }
   });
 
@@ -307,7 +276,7 @@ function handleBuy(player, msg) {
 }
 
 function handleReload(player) {
-  if (!player.alive || !player.inArena || player.reloading) return;
+  if (!player.alive || !player.inArena || player.reloading || player.activeSlot === 'secondary') return;
   const weapon = getWeapon(player.weaponId);
   if (player.ammo >= weapon.magSize || player.reserveAmmo <= 0) return;
   player.reloading = true;
@@ -324,22 +293,11 @@ function handleReload(player) {
   send(player.ws, { type: MSG.AMMO, ammo: player.ammo, reserveAmmo: player.reserveAmmo, reloading: true });
 }
 
-function handleShoot(shooter) {
-  if (!shooter.alive || !shooter.inArena || shooter.reloading || shooter.ammo <= 0) return;
-  const weapon = SHOP_WEAPONS.find((w) => w.id === shooter.weaponId) || SHOP_WEAPONS[0];
-  const now = Date.now();
-  if (now - shooter.lastShotAt < weapon.fireCooldownMs) return;
-  shooter.lastShotAt = now;
-  shooter.ammo -= 1;
-  send(shooter.ws, { type: MSG.AMMO, ammo: shooter.ammo, reserveAmmo: shooter.reserveAmmo, reloading: false });
-
-  // Raycast from shooter's eye position along yaw/pitch against other players (as spheres).
-  const eyeY = shooter.y + (shooter.move.crouching ? CROUCH_EYE_HEIGHT : STAND_EYE_HEIGHT);
-  const dir = yawPitchToDir(shooter.yaw, shooter.pitch);
-
+// Raycasts from the shooter's eye along yaw/pitch against every other living in-arena player
+// (as spheres), returning the closest hit within `range`, or null.
+function findClosestTarget(shooter, eyeY, dir, range) {
   let closestHit = null;
-  let closestDist = weapon.range;
-
+  let closestDist = range;
   for (const target of players.values()) {
     if (target.id === shooter.id || !target.alive || !target.inArena) continue;
     const targetCenterY = target.y + (target.move.crouching || target.move.sliding ? CROUCH_HIT_CENTER : STAND_HIT_CENTER);
@@ -354,6 +312,55 @@ function handleShoot(shooter) {
       closestHit = target;
     }
   }
+  return closestHit;
+}
+
+// Applies damage to a hit target, broadcasts it, and handles death/respawn if it's lethal.
+// Shared by gunfire, knife slashes, and backstabs so the kill/respawn flow only lives once.
+function applyDamage(shooter, target, damage) {
+  target.health -= damage;
+  broadcast({ type: MSG.HIT, targetId: target.id, health: Math.max(0, target.health), byId: shooter.id });
+
+  if (target.health <= 0) {
+    target.alive = false;
+    target.deaths += 1;
+    shooter.kills += 1;
+    shooter.money += KILL_REWARD;
+    broadcast({ type: MSG.KILL, victimId: target.id, killerId: shooter.id, kills: shooter.kills, deaths: target.deaths });
+    send(shooter.ws, { type: MSG.MONEY, money: shooter.money });
+
+    setTimeout(() => {
+      if (!players.has(target.id)) return;
+      const spawn = randomSpawn();
+      target.x = spawn.x;
+      target.y = spawn.y;
+      target.z = spawn.z;
+      target.health = PLAYER_MAX_HEALTH;
+      target.alive = true;
+      target.move = createMovementState();
+      resetAmmo(target);
+      send(target.ws, { type: MSG.AMMO, ammo: target.ammo, reserveAmmo: target.reserveAmmo, reloading: false });
+      broadcast({ type: MSG.RESPAWN, id: target.id, x: target.x, y: target.y, z: target.z, health: target.health });
+    }, RESPAWN_TIME_MS);
+  }
+}
+
+function handleShoot(shooter) {
+  const usingKnife = shooter.activeSlot === 'secondary';
+  if (!shooter.alive || !shooter.inArena) return;
+  if (!usingKnife && (shooter.reloading || shooter.ammo <= 0)) return;
+  const weapon = getActiveWeapon(shooter);
+  const now = Date.now();
+  if (now - shooter.lastShotAt < weapon.fireCooldownMs) return;
+  shooter.lastShotAt = now;
+  if (!usingKnife) {
+    shooter.ammo -= 1;
+    send(shooter.ws, { type: MSG.AMMO, ammo: shooter.ammo, reserveAmmo: shooter.reserveAmmo, reloading: false });
+  }
+
+  const eyeY = shooter.y + (shooter.move.crouching ? CROUCH_EYE_HEIGHT : STAND_EYE_HEIGHT);
+  const dir = yawPitchToDir(shooter.yaw, shooter.pitch);
+  const closestHit = findClosestTarget(shooter, eyeY, dir, weapon.range);
 
   broadcast({
     type: MSG.SHOOT,
@@ -364,31 +371,38 @@ function handleShoot(shooter) {
 
   if (closestHit) {
     const damage = closestHit.armor ? weapon.damage * (1 - ARMOR_DAMAGE_REDUCTION) : weapon.damage;
-    closestHit.health -= damage;
-    broadcast({ type: MSG.HIT, targetId: closestHit.id, health: Math.max(0, closestHit.health), byId: shooter.id });
+    applyDamage(shooter, closestHit, damage);
+  }
+}
 
-    if (closestHit.health <= 0) {
-      closestHit.alive = false;
-      closestHit.deaths += 1;
-      shooter.kills += 1;
-      shooter.money += KILL_REWARD;
-      broadcast({ type: MSG.KILL, victimId: closestHit.id, killerId: shooter.id, kills: shooter.kills, deaths: closestHit.deaths });
-      send(shooter.ws, { type: MSG.MONEY, money: shooter.money });
+// Right-click with the knife out: a stab that instantly kills if you're roughly behind the
+// target (their facing points away from you), otherwise lands as a normal knife hit. Backstabs
+// bypass armor entirely — they're a reward for the risk of closing distance undetected.
+function handleStab(shooter) {
+  if (!shooter.alive || !shooter.inArena || shooter.activeSlot !== 'secondary') return;
+  const now = Date.now();
+  if (now - shooter.lastStabAt < KNIFE_WEAPON.stabCooldownMs) return;
+  shooter.lastStabAt = now;
 
-      setTimeout(() => {
-        if (!players.has(closestHit.id)) return;
-        const spawn = randomSpawn();
-        closestHit.x = spawn.x;
-        closestHit.y = spawn.y;
-        closestHit.z = spawn.z;
-        closestHit.health = PLAYER_MAX_HEALTH;
-        closestHit.alive = true;
-        closestHit.move = createMovementState();
-        resetAmmo(closestHit);
-        send(closestHit.ws, { type: MSG.AMMO, ammo: closestHit.ammo, reserveAmmo: closestHit.reserveAmmo, reloading: false });
-        broadcast({ type: MSG.RESPAWN, id: closestHit.id, x: closestHit.x, y: closestHit.y, z: closestHit.z, health: closestHit.health });
-      }, RESPAWN_TIME_MS);
-    }
+  const eyeY = shooter.y + (shooter.move.crouching ? CROUCH_EYE_HEIGHT : STAND_EYE_HEIGHT);
+  const dir = yawPitchToDir(shooter.yaw, shooter.pitch);
+  const target = findClosestTarget(shooter, eyeY, dir, KNIFE_WEAPON.range);
+
+  broadcast({ type: MSG.STAB, id: shooter.id, origin: { x: shooter.x, y: eyeY, z: shooter.z }, dir });
+
+  if (!target) return;
+
+  const targetForward = yawPitchToDir(target.yaw, 0);
+  const toAttacker = { x: shooter.x - target.x, z: shooter.z - target.z };
+  const len = Math.hypot(toAttacker.x, toAttacker.z) || 1;
+  const dot = targetForward.x * (toAttacker.x / len) + targetForward.z * (toAttacker.z / len);
+  const isBackstab = dot < -0.5; // attacker sits within ~120° behind the target's facing
+
+  if (isBackstab) {
+    broadcast({ type: MSG.BACKSTAB, targetId: target.id, byId: shooter.id });
+    applyDamage(shooter, target, target.health); // lethal regardless of armor
+  } else {
+    applyDamage(shooter, target, target.armor ? KNIFE_WEAPON.damage * (1 - ARMOR_DAMAGE_REDUCTION) : KNIFE_WEAPON.damage);
   }
 }
 
@@ -429,6 +443,7 @@ function serializePublic(p) {
     crouching: p.move.crouching,
     sliding: p.move.sliding,
     inArena: p.inArena,
+    activeSlot: p.activeSlot,
   };
 }
 
@@ -436,7 +451,6 @@ function serializePublic(p) {
 const dtMs = 1000 / TICK_RATE;
 setInterval(() => {
   for (const p of players.values()) {
-    if (p.isBot) updateBotAI(p);
     if (!p.alive) continue;
     stepMovement(p.move, p, { forward: p.input.forward, right: p.input.right, crouch: p.input.crouch, yaw: p.yaw }, dtMs, collidesWithCover, p.inArena ? clampToArena : clampToLobby);
 
@@ -457,7 +471,7 @@ setInterval(() => {
       }
     }
 
-    if (p.inArena && !p.isBot) {
+    if (p.inArena) {
       for (const crate of crates) {
         if (!crate.active) continue;
         if (Math.hypot(p.x - crate.x, p.z - crate.z) >= AMMO_CRATE_RADIUS) continue;

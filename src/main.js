@@ -18,6 +18,8 @@ import {
   STARTING_MONEY,
   DEFAULT_WEAPON_ID,
   SHOP_WEAPONS,
+  KNIFE_WEAPON,
+  DEFAULT_SLOT,
   ARMOR_COST,
   STAND_EYE_HEIGHT,
   CROUCH_EYE_HEIGHT,
@@ -32,6 +34,9 @@ const healthEl = document.getElementById('health');
 const moneyEl = document.getElementById('money');
 const ammoEl = document.getElementById('ammo');
 const weaponNameEl = document.getElementById('weapon-name');
+const slotPrimaryEl = document.getElementById('slot-primary');
+const slotSecondaryEl = document.getElementById('slot-secondary');
+const slotPrimaryNameEl = document.getElementById('slot-primary-name');
 const scoreboardEl = document.getElementById('scoreboard');
 const killfeedEl = document.getElementById('killfeed');
 const respawnEl = document.getElementById('respawn');
@@ -202,6 +207,69 @@ function drawCrate(ctx, size) {
   for (let i = 0; i < 250; i++) {
     ctx.fillStyle = `rgba(40,40,35,${Math.random() * 0.06})`;
     ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
+  }
+}
+
+// Weapon materials — flat colors alone read as plastic toys at close range (the first-person
+// view model sits right in front of the camera), so these give metal a brushed-steel grain
+// and polymer/rubber a fine matte speckle.
+function drawBrushedMetal(ctx, size) {
+  ctx.fillStyle = '#2a2c30';
+  ctx.fillRect(0, 0, size, size);
+  // Horizontal brushing streaks.
+  for (let i = 0; i < 500; i++) {
+    const y = Math.random() * size;
+    const shade = Math.random() * 0.5;
+    ctx.strokeStyle = `rgba(255,255,255,${shade * 0.12})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(size, y + (Math.random() - 0.5) * 2);
+    ctx.stroke();
+  }
+  // Faint scratches at odd angles for wear.
+  for (let i = 0; i < 30; i++) {
+    ctx.strokeStyle = `rgba(255,255,255,${Math.random() * 0.15})`;
+    const x = Math.random() * size, y = Math.random() * size;
+    const len = Math.random() * size * 0.3;
+    const angle = Math.random() * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+    ctx.stroke();
+  }
+}
+
+function drawPolymerGrain(ctx, size) {
+  ctx.fillStyle = '#19191a';
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 2000; i++) {
+    const v = Math.random();
+    ctx.fillStyle = v > 0.5 ? `rgba(255,255,255,${(v - 0.5) * 0.1})` : `rgba(0,0,0,${(0.5 - v) * 0.15})`;
+    ctx.fillRect(Math.random() * size, Math.random() * size, 1.5, 1.5);
+  }
+}
+
+function drawRubberGrip(ctx, size) {
+  ctx.fillStyle = '#242422';
+  ctx.fillRect(0, 0, size, size);
+  // A criss-cross checkered grip pattern, like molded pistol-grip texturing.
+  const step = size / 10;
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 1.5;
+  for (let i = 1; i < 10; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * step, 0);
+    ctx.lineTo(i * step, size);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i * step);
+    ctx.lineTo(size, i * step);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 400; i++) {
+    ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.1})`;
+    ctx.fillRect(Math.random() * size, Math.random() * size, 1.5, 1.5);
   }
 }
 
@@ -546,6 +614,16 @@ function makeThirdPersonGun() {
   return { group, muzzle, flash };
 }
 
+// A third-person knife prop, swapped in for the gun prop on the same arm pivot whenever the
+// secondary slot is active. Built from the same realistic geometry as the first-person view
+// model (see buildKnifeGroup, defined further down but hoisted — this only runs later, once
+// makePlayerMesh() is actually called).
+function makeThirdPersonKnife() {
+  const group = buildKnifeGroup();
+  group.visible = false;
+  return group;
+}
+
 // Two-bone IK: given the hip's height above the ground (the foot's target is always
 // straight down at y=0), solve the hip and knee angles that place the foot exactly there.
 // At hipHeight === L1+L2 (fully extended) this returns {hipAngle:0, kneeBend:0} — a straight
@@ -639,6 +717,7 @@ function makePlayerMesh() {
   const shoulderY = 1.34;
   const armPivots = [];
   let gunProp = null;
+  let knifeProp = null;
   [-1, 1].forEach((side) => {
     const isSupportHand = side === -1; // left hand grips the handguard — a two-handed hold
     const pivot = new THREE.Group();
@@ -661,12 +740,18 @@ function makePlayerMesh() {
 
     // A simplified rifle prop on the right arm, so third-person (self or remote) shows a
     // held weapon rather than empty hands. Rides the shoulder pivot, so it swings with the
-    // arm during the walk cycle same as everything else on this joint chain.
+    // arm during the walk cycle same as everything else on this joint chain. The knife prop
+    // sits at the same spot and is toggled with it based on which slot is active.
     if (side === 1) {
       gunProp = makeThirdPersonGun();
       gunProp.group.position.set(0.03, 1.03 - shoulderY - 0.05, 0.16);
       gunProp.group.rotation.set(-0.32, 0, 0);
       pivot.add(gunProp.group);
+
+      knifeProp = makeThirdPersonKnife();
+      knifeProp.position.set(0.03, 1.03 - shoulderY - 0.05, 0.16);
+      knifeProp.rotation.set(-0.32, 0, 0);
+      pivot.add(knifeProp);
     }
   });
 
@@ -681,6 +766,8 @@ function makePlayerMesh() {
   group.userData.upperBody = upperBody; // lowered + leaned as a unit for crouch/slide
   group.userData.gunMuzzle = gunProp.muzzle;
   group.userData.gunFlash = gunProp.flash;
+  group.userData.gunPropGroup = gunProp.group;
+  group.userData.knifePropGroup = knifeProp;
   group.userData.recoil = 0;
   return group;
 }
@@ -737,7 +824,10 @@ function updateCharacterPose(mesh, state, dt, crouching, sliding, isMoving) {
   mesh.userData.upperBody.rotation.x = state.lean;
 
   mesh.userData.recoil = Math.max(0, mesh.userData.recoil - dt * 8);
-  mesh.userData.gunFlash.intensity = mesh.userData.recoil > 0.7 ? 3 : 0;
+  // No muzzle flash while the knife is out — the flash light lives on the gun prop, which is
+  // hidden in that state anyway, but the recoil-driven arm kick above still plays for the
+  // knife swing itself.
+  mesh.userData.gunFlash.intensity = mesh.userData.recoil > 0.7 && mesh.userData.gunPropGroup.visible ? 3 : 0;
 }
 
 // Called once when a character (self or remote) fires, so third-person shooting is visible:
@@ -788,9 +878,79 @@ function addCoverBoxes(boxes) {
 }
 
 // ---------- Gun view model: a multi-part carbine, attached to the camera ----------
-const gunMetalMat = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.35, metalness: 0.85 });
-const gunPolymerMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6, metalness: 0.2 });
-const gunGripMat = new THREE.MeshStandardMaterial({ color: 0x2e2e2e, roughness: 0.75, metalness: 0.1 });
+const gunMetalTexture = makeProceduralTexture(drawBrushedMetal, 128, 2, 2);
+const gunPolymerTexture = makeProceduralTexture(drawPolymerGrain, 128, 1, 1);
+const gunGripTexture = makeProceduralTexture(drawRubberGrip, 128, 1, 2);
+const gunMetalMat = new THREE.MeshStandardMaterial({ map: gunMetalTexture, color: 0x9aa0a8, roughness: 0.35, metalness: 0.85 });
+const gunPolymerMat = new THREE.MeshStandardMaterial({ map: gunPolymerTexture, color: 0x8a8a8a, roughness: 0.6, metalness: 0.2 });
+const gunGripMat = new THREE.MeshStandardMaterial({ map: gunGripTexture, color: 0x9a9a9a, roughness: 0.75, metalness: 0.1 });
+
+// ---------- Knife: a tactical fixed-blade combat knife, built from real proportions ----------
+// (~7cm handle, ~12cm blade) rather than a flat slab — a full-tang taper, a distinct guard,
+// a pommel with a lanyard hole, and a grip with actual finger-ridge geometry.
+const knifeBladeMat = new THREE.MeshStandardMaterial({ map: gunMetalTexture, color: 0xc7ccd1, roughness: 0.28, metalness: 0.95 });
+const knifeEdgeMat = new THREE.MeshStandardMaterial({ color: 0xd7dade, roughness: 0.15, metalness: 0.95 });
+const knifeGuardMat = new THREE.MeshStandardMaterial({ map: gunMetalTexture, color: 0x8a8f94, roughness: 0.5, metalness: 0.75 });
+const knifeGripMat = new THREE.MeshStandardMaterial({ map: gunGripTexture, color: 0x8f9384, roughness: 0.85, metalness: 0.05 });
+const knifePommelMat = new THREE.MeshStandardMaterial({ map: gunMetalTexture, color: 0xa0a0a0, roughness: 0.4, metalness: 0.8 });
+
+function buildKnifeGroup() {
+  const group = new THREE.Group();
+  // Local +Z is toward the pommel/hand, -Z is toward the tip — same convention as the blade
+  // taper below, so the whole knife reads correctly once attached hilt-first to a hand/pivot.
+
+  // Blade: a tapered body (wide at the guard, narrowing toward the tip) plus a pyramidal
+  // point, with a thin brighter edge strip along the bottom to read as a sharpened bevel.
+  const bladeLength = 0.16;
+  const bladeBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.016, 0.021, bladeLength, 4, 1, false, Math.PI / 4),
+    knifeBladeMat
+  );
+  bladeBase.scale.set(1, 1, 0.22); // squash the 4-sided cylinder into a flat tapered blade
+  bladeBase.rotation.x = -Math.PI / 2;
+  bladeBase.position.set(0, 0, -0.08);
+  group.add(bladeBase);
+
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.045, 4), knifeBladeMat);
+  tip.scale.set(1, 1, 0.22);
+  tip.rotation.x = -Math.PI / 2;
+  tip.rotation.y = Math.PI / 4;
+  tip.position.set(0, 0, -0.16 - 0.018);
+  group.add(tip);
+
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, bladeLength + 0.03), knifeEdgeMat);
+  edge.position.set(0, -0.009, -0.09);
+  group.add(edge);
+
+  // Guard: a small crossbar between blade and handle.
+  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.016, 0.016), knifeGuardMat);
+  guard.position.set(0, 0, 0.005);
+  group.add(guard);
+
+  // Handle: a tapered rubberized grip with a few raised finger-ridge rings, not just a bare
+  // cylinder — this is what mainly sells "real tool" over "gray blob".
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.021, 0.11, 10), knifeGripMat);
+  handle.rotation.x = Math.PI / 2;
+  handle.position.set(0, 0, 0.065);
+  group.add(handle);
+  for (let i = 0; i < 4; i++) {
+    const ridge = new THREE.Mesh(new THREE.TorusGeometry(0.019, 0.0035, 6, 12), knifeGripMat);
+    ridge.position.set(0, 0, 0.03 + i * 0.022);
+    group.add(ridge);
+  }
+
+  // Pommel: a capped end with a lanyard hole, so the handle doesn't just stop abruptly.
+  const pommel = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.019, 0.018, 10), knifePommelMat);
+  pommel.rotation.x = Math.PI / 2;
+  pommel.position.set(0, 0, 0.128);
+  group.add(pommel);
+  const lanyardHole = new THREE.Mesh(new THREE.TorusGeometry(0.007, 0.0025, 6, 10), knifePommelMat);
+  lanyardHole.position.set(0, 0, 0.135);
+  group.add(lanyardHole);
+
+  group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return group;
+}
 
 const gunGroup = new THREE.Group();
 gunGroup.position.set(0.26, -0.24, -0.5);
@@ -842,6 +1002,18 @@ const gunRestPos = gunGroup.position.clone();
 let recoil = 0;
 let bobPhase = 0;
 let padPulse = 0;
+
+// First-person knife view model — shown instead of the gun while the secondary slot is
+// active. Same camera-relative rig as the gun (rest position, recoil kick, sway), built from
+// the shared realistic knife geometry (see buildKnifeGroup above).
+const knifeGroup = buildKnifeGroup();
+knifeGroup.position.set(0.22, -0.2, -0.38);
+knifeGroup.rotation.set(-0.15, -0.35, 0.2);
+knifeGroup.scale.setScalar(1.6); // a bit larger up close, like an FPS view-model convention
+knifeGroup.visible = false;
+knifeGroup.traverse((o) => { if (o.isMesh) o.castShadow = false; });
+camera.add(knifeGroup);
+const knifeRestPos = knifeGroup.position.clone();
 
 // Muzzle flash
 const flash = new THREE.PointLight(0xffcc66, 0, 4);
@@ -919,6 +1091,10 @@ window.addEventListener('keydown', (e) => {
     tryCrouchPress();
   } else if (e.code === 'KeyR') {
     tryReload();
+  } else if (e.code === 'Digit1') {
+    trySwitchSlot('primary');
+  } else if (e.code === 'Digit2') {
+    trySwitchSlot('secondary');
   }
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
@@ -962,9 +1138,12 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mousedown', (e) => {
-  if (e.button !== 0) return;
   if (!started || shopOpen) return;
-  tryShoot();
+  if (e.button === 0) tryShoot();
+  else if (e.button === 2) tryStab();
+});
+window.addEventListener('contextmenu', (e) => {
+  if (started) e.preventDefault(); // right-click is the knife backstab, not a browser menu
 });
 
 // ---------- Networked state ----------
@@ -975,14 +1154,23 @@ let health = PLAYER_MAX_HEALTH;
 let money = STARTING_MONEY;
 let weaponId = DEFAULT_WEAPON_ID;
 let hasArmor = false;
+let activeSlot = DEFAULT_SLOT; // 'primary' or 'secondary' (knife) — server-authoritative
 let ammo = 0;
 let reserveAmmo = 0;
 let reloading = false;
 function currentWeapon() {
+  if (activeSlot === 'secondary') return KNIFE_WEAPON;
   return SHOP_WEAPONS.find((w) => w.id === weaponId) || SHOP_WEAPONS[0];
 }
 function updateAmmoHud() {
-  ammoEl.textContent = reloading ? 'RELOADING…' : `${ammo} / ${reserveAmmo}`;
+  ammoEl.textContent = activeSlot === 'secondary' ? '∞' : reloading ? 'RELOADING…' : `${ammo} / ${reserveAmmo}`;
+  updateSlotUI();
+}
+function updateSlotUI() {
+  const primaryName = SHOP_WEAPONS.find((w) => w.id === weaponId)?.name || 'Rifle';
+  slotPrimaryNameEl.textContent = primaryName;
+  slotPrimaryEl.classList.toggle('active', activeSlot === 'primary');
+  slotSecondaryEl.classList.toggle('active', activeSlot === 'secondary');
 }
 const self = { x: 0, y: 1, z: 0 };
 const moveState = createMovementState();
@@ -1037,15 +1225,23 @@ function tryCrouchPress() {
 }
 
 function tryShoot() {
-  if (!alive || !inArena || reloading || ammo <= 0) return;
+  if (!alive || !inArena) return;
+  const usingKnife = activeSlot === 'secondary';
+  if (!usingKnife && (reloading || ammo <= 0)) return;
   const now = performance.now();
   if (now - lastShotAt < currentWeapon().fireCooldownMs) return;
   lastShotAt = now;
   net.send({ type: MSG.SHOOT });
-  ammo -= 1;
-  updateAmmoHud();
+  if (!usingKnife) {
+    ammo -= 1;
+    updateAmmoHud();
+  }
   recoil = 1;
   triggerThirdPersonShot(selfMesh);
+
+  // Knife swings get the recoil-driven arm animation above but no muzzle flash or bullet
+  // tracer — those are gunfire-only VFX.
+  if (usingKnife) return;
 
   // Local tracer prediction from gun muzzle toward aim direction (visual only; server decides real hits).
   const dir = new THREE.Vector3();
@@ -1062,10 +1258,26 @@ function tryShoot() {
   spawnTracer(muzzleWorld, end);
 }
 
+let lastStabAt = 0;
+function tryStab() {
+  if (!alive || !inArena || activeSlot !== 'secondary') return;
+  const now = performance.now();
+  if (now - lastStabAt < KNIFE_WEAPON.stabCooldownMs) return;
+  lastStabAt = now;
+  net.send({ type: MSG.STAB });
+  recoil = 1;
+  triggerThirdPersonShot(selfMesh);
+}
+
 function tryReload() {
-  if (!alive || !inArena || reloading) return;
+  if (!alive || !inArena || reloading || activeSlot === 'secondary') return;
   if (ammo >= currentWeapon().magSize || reserveAmmo <= 0) return;
   net.send({ type: MSG.RELOAD });
+}
+
+function trySwitchSlot(slot) {
+  if (!alive || activeSlot === slot) return;
+  net.send({ type: MSG.SWITCH, slot });
 }
 
 const net = new Net({
@@ -1085,6 +1297,7 @@ const net = new Net({
         hasArmor = msg.self.armor;
         ammo = msg.self.ammo;
         reserveAmmo = msg.self.reserveAmmo;
+        activeSlot = msg.self.activeSlot;
         moneyEl.textContent = `$${money}`;
         weaponNameEl.textContent = currentWeapon().name;
         updateAmmoHud();
@@ -1144,6 +1357,7 @@ const net = new Net({
           rp.crouching = p.crouching;
           rp.sliding = p.sliding;
           rp.inArena = p.inArena;
+          rp.activeSlot = p.activeSlot;
         }
         updateScoreboard();
         break;
@@ -1152,9 +1366,11 @@ const net = new Net({
         if (msg.id === selfId) break; // already drew local tracer
         const rp = remotePlayers.get(msg.id);
         if (!rp) break;
-        const from = new THREE.Vector3(msg.origin.x, msg.origin.y, msg.origin.z);
-        const end = from.clone().addScaledVector(new THREE.Vector3(msg.dir.x, msg.dir.y, msg.dir.z), 120);
-        spawnTracer(from, end);
+        if (rp.activeSlot !== 'secondary') {
+          const from = new THREE.Vector3(msg.origin.x, msg.origin.y, msg.origin.z);
+          const end = from.clone().addScaledVector(new THREE.Vector3(msg.dir.x, msg.dir.y, msg.dir.z), 120);
+          spawnTracer(from, end);
+        }
         triggerThirdPersonShot(rp.mesh);
         break;
       }
@@ -1264,6 +1480,23 @@ const net = new Net({
         setCrateActive(msg.id, msg.active);
         break;
       }
+      case MSG.SWITCH: {
+        activeSlot = msg.slot;
+        weaponNameEl.textContent = currentWeapon().name;
+        updateAmmoHud();
+        break;
+      }
+      case MSG.STAB: {
+        if (msg.id === selfId) break; // already showed our own lunge locally
+        const rp = remotePlayers.get(msg.id);
+        if (rp) triggerThirdPersonShot(rp.mesh);
+        break;
+      }
+      case MSG.BACKSTAB: {
+        lastBackstabVictimId = msg.targetId;
+        if (msg.targetId === selfId) flashDamage();
+        break;
+      }
     }
   },
 });
@@ -1283,6 +1516,7 @@ function addRemotePlayer(p) {
     crouching: p.crouching || false,
     sliding: p.sliding || false,
     inArena: p.inArena || false,
+    activeSlot: p.activeSlot || 'primary',
     hipY: STAND_HIP_Y,
     lean: 0,
     walkPhase: 0,
@@ -1301,11 +1535,14 @@ function removeRemotePlayer(id) {
   scores.delete(id);
 }
 
+let lastBackstabVictimId = null;
 function addKillFeedLine(killerId, victimId) {
   const killerName = killerId === selfId ? 'You' : (scores.get(killerId)?.name || '???');
   const victimName = victimId === selfId ? 'You' : (scores.get(victimId)?.name || '???');
+  const verb = victimId === lastBackstabVictimId ? 'backstabbed' : '⚔';
+  lastBackstabVictimId = null;
   const line = document.createElement('div');
-  line.textContent = `${killerName} ⚔ ${victimName}`;
+  line.textContent = `${killerName} ${verb} ${victimName}`;
   killfeedEl.prepend(line);
   setTimeout(() => line.remove(), 4000);
 }
@@ -1404,9 +1641,13 @@ function updateMovement(dt) {
 
   // Third-person self model: same walk-cycle rig and math as remote players (see the render
   // loop's per-remote-player block), driven directly by local input instead of server deltas.
-  selfMesh.visible = thirdPerson && alive && started;
+  // On death the body stays visible lying flat on the ground for the respawn delay, rather
+  // than just vanishing — shown whenever dead regardless of view mode, since third-person is
+  // the only way to actually see it (first-person view is covered by the death overlay).
+  selfMesh.visible = (thirdPerson || !alive) && started;
   selfMesh.position.set(self.x, self.y, self.z);
   selfMesh.rotation.y = yaw;
+  selfMesh.rotation.x = alive ? 0 : -Math.PI / 2;
   const selfBodyMat = selfMesh.userData.body.material;
   selfBodyMat.color.setHex(inArena ? 0xd94f4f : 0x4f8fd9);
   updateCharacterPose(selfMesh, selfPoseState, dt, moveState.crouching, moveState.sliding, moving);
@@ -1418,12 +1659,20 @@ function updateMovement(dt) {
   recoil = Math.max(0, recoil - dt * 9);
   const recoilKick = recoil * 0.06;
 
-  gunGroup.position.set(
-    gunRestPos.x + bobAmountX,
-    gunRestPos.y + bobAmountY,
-    gunRestPos.z + recoilKick
+  const usingKnifeView = activeSlot === 'secondary';
+  gunGroup.visible = !thirdPerson && !usingKnifeView;
+  knifeGroup.visible = !thirdPerson && usingKnifeView;
+  selfMesh.userData.gunPropGroup.visible = !usingKnifeView;
+  selfMesh.userData.knifePropGroup.visible = usingKnifeView;
+
+  const activeGroup = usingKnifeView ? knifeGroup : gunGroup;
+  const activeRest = usingKnifeView ? knifeRestPos : gunRestPos;
+  activeGroup.position.set(
+    activeRest.x + bobAmountX,
+    activeRest.y + bobAmountY,
+    activeRest.z + recoilKick
   );
-  gunGroup.rotation.x = -recoil * 0.12;
+  activeGroup.rotation.x = (usingKnifeView ? -0.1 : 0) - recoil * 0.12;
 
   // Send input to server at a fixed rate (~20/s) regardless of frame rate.
   inputSendAccum += dt;
@@ -1449,9 +1698,13 @@ function animate() {
     rp.z += (rp.targetZ - rp.z) * Math.min(1, dt * 12);
     rp.mesh.position.set(rp.x, rp.y, rp.z);
     rp.mesh.rotation.y = rp.yaw;
-    rp.mesh.visible = rp.alive;
+    rp.mesh.rotation.x = rp.alive ? 0 : -Math.PI / 2;
+    rp.mesh.visible = true; // dead bodies stay visible lying down for the respawn delay
     const bodyMat = rp.mesh.userData.body.material;
     bodyMat.color.setHex(rp.inArena ? 0xd94f4f : 0x4f8fd9);
+    const rpUsingKnife = rp.activeSlot === 'secondary';
+    rp.mesh.userData.gunPropGroup.visible = !rpUsingKnife;
+    rp.mesh.userData.knifePropGroup.visible = rpUsingKnife;
     updateCharacterPose(rp.mesh, rp, dt, rp.crouching, rp.sliding, rp.isMoving);
   }
 

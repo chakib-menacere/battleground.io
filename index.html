@@ -40,6 +40,25 @@
         font: 600 12px system-ui, sans-serif; color: #93b8b4; letter-spacing: 1px;
         text-transform: uppercase; margin-bottom: 2px;
       }
+      #slot-ui {
+        position: absolute; right: 16px; bottom: 78px; display: flex; gap: 6px;
+        pointer-events: none; user-select: none;
+      }
+      #slot-ui .slot {
+        display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+        background: rgba(20,24,26,0.55); border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 4px; color: rgba(255,255,255,0.55);
+        font: 600 13px system-ui, sans-serif; transition: all 0.12s ease;
+      }
+      #slot-ui .slot .key {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 16px; height: 16px; border-radius: 3px; background: rgba(255,255,255,0.12);
+        font: 700 11px system-ui, sans-serif;
+      }
+      #slot-ui .slot.active {
+        color: #fff; border-color: #2fe0c4; background: rgba(47,224,196,0.18);
+      }
+      #slot-ui .slot.active .key { background: #2fe0c4; color: #0a1614; }
       #scoreboard {
         position: absolute; right: 16px; top: 16px; color: #fff;
         font: 500 14px/1.5 system-ui, sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,0.8);
@@ -164,6 +183,10 @@
       <div id="ammo-hud">
         <div class="weapon-name" id="weapon-name">Rifle</div>
         <div id="ammo">30 / 90</div>
+      </div>
+      <div id="slot-ui">
+        <div class="slot" id="slot-primary"><span class="key">1</span><span id="slot-primary-name">Rifle</span></div>
+        <div class="slot" id="slot-secondary"><span class="key">2</span><span>Knife</span></div>
       </div>
       <div id="scoreboard"></div>
       <div id="killfeed"></div>
