@@ -191,4 +191,5 @@ export const MSG = {
   CRATE: 'crate',
   INTERACT: 'interact',
   DOOR_PROGRESS: 'doorProgress',
+  WALLKICK: 'wallkick',
 };

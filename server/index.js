@@ -211,7 +211,9 @@ wss.on('connection', (ws) => {
     } else if (msg.type === MSG.STAB) {
       handleStab(player);
     } else if (msg.type === MSG.JUMP) {
-      if (player.alive) attemptJump(player.move, player.x, player.z);
+      if (player.alive && attemptJump(player.move, player.x, player.z) === 'wallkick') {
+        broadcast({ type: MSG.WALLKICK, id: player.id }, player.id);
+      }
     } else if (msg.type === MSG.SLIDE) {
       if (!player.alive) return;
       const { forward, right } = player.input;

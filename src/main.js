@@ -877,6 +877,21 @@ function updateCharacterPose(mesh, state, dt, crouching, sliding, isMoving) {
   mesh.userData.upperBody.position.y = state.hipY - STAND_HIP_Y + bob;
   mesh.userData.upperBody.rotation.x = state.lean;
 
+  // Wall kick: a brief, distinct "just pushed off" pose layered on top of everything above —
+  // knees tuck up hard, thighs kick forward, arms throw up for balance, torso leans back away
+  // from the wall. Decays out over ~0.4s (see triggerWallKickPose for how this gets set to 1).
+  if (state.wallKickAnim > 0) {
+    const kick = state.wallKickAnim;
+    kneeL.rotation.x -= kick * 1.2;
+    kneeR.rotation.x -= kick * 1.2;
+    legL.rotation.x += kick * 0.4;
+    legR.rotation.x += kick * 0.4;
+    armL.rotation.x -= kick * 0.8;
+    armR.rotation.x -= kick * 0.8;
+    mesh.userData.upperBody.rotation.x -= kick * 0.35;
+    state.wallKickAnim = Math.max(0, kick - dt * 2.5);
+  }
+
   mesh.userData.recoil = Math.max(0, mesh.userData.recoil - dt * 8);
   // No muzzle flash while the knife is out — the flash light lives on the gun prop, which is
   // hidden in that state anyway, but the recoil-driven arm kick above still plays for the
@@ -1258,7 +1273,15 @@ const selfMesh = makePlayerMesh();
 selfMesh.visible = false;
 selfMesh.userData.nameSprite.visible = false; // no floating nametag over your own head
 scene.add(selfMesh);
-const selfPoseState = { hipY: STAND_HIP_Y, lean: 0, walkPhase: 0, walkAmp: 0 };
+const selfPoseState = { hipY: STAND_HIP_Y, lean: 0, walkPhase: 0, walkAmp: 0, wallKickAnim: 0 };
+
+// Wall kick pose: legs kick back and tuck as if just pushing off a surface, torso leans away
+// from it, arms throw up for balance — a distinct silhouette from a normal jump, decaying out
+// over ~0.4s (see updateCharacterPose). Used for both the local player and remote players (via
+// the MSG.WALLKICK broadcast), since a normal jump gives no such signal on its own.
+function triggerWallKickPose(poseState) {
+  poseState.wallKickAnim = 1;
+}
 
 function setThirdPerson(on) {
   thirdPerson = on;
@@ -1280,8 +1303,10 @@ let lastShotAt = 0;
 
 function tryJump() {
   if (moveState.sliding) return;
-  if (attemptJump(moveState, self.x, self.z)) {
+  const result = attemptJump(moveState, self.x, self.z);
+  if (result) {
     net.send({ type: MSG.JUMP });
+    if (result === 'wallkick') triggerWallKickPose(selfPoseState);
   }
 }
 
@@ -1577,6 +1602,11 @@ const net = new Net({
         if (msg.targetId === selfId) flashDamage();
         break;
       }
+      case MSG.WALLKICK: {
+        const rp = remotePlayers.get(msg.id);
+        if (rp) triggerWallKickPose(rp);
+        break;
+      }
     }
   },
 });
@@ -1601,6 +1631,7 @@ function addRemotePlayer(p) {
     lean: 0,
     walkPhase: 0,
     walkAmp: 0,
+    wallKickAnim: 0,
     isMoving: false,
   });
   scores.set(p.id, { name: p.name, kills: p.kills || 0, deaths: p.deaths || 0 });

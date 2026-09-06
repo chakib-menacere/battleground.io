@@ -138,21 +138,22 @@ export function applyJump(state) {
 
 // Jump input handling: a normal jump off the ground, or — if already airborne, near a wall,
 // and this airborne stretch hasn't used one yet — a wall kick launching up and away from it.
-// Returns true if anything happened (useful for triggering VFX at the call site).
+// Returns 'jump', 'wallkick', or null (nothing happened) — the distinction is what lets the
+// call site play the right animation/VFX instead of just a generic "something happened" flag.
 export function attemptJump(state, x, z) {
   if (state.grounded) {
     applyJump(state);
-    return state.vy === JUMP_VELOCITY;
+    return state.vy === JUMP_VELOCITY ? 'jump' : null;
   }
-  if (state.wallKicked) return false;
+  if (state.wallKicked) return null;
   const wall = findWallKickNormal(x, z, WALLKICK_RANGE);
-  if (!wall) return false;
+  if (!wall) return null;
   state.vy = WALLKICK_UP_VELOCITY;
   state.kickVX = wall.x * WALLKICK_PUSH_SPEED;
   state.kickVZ = wall.z * WALLKICK_PUSH_SPEED;
   state.wallKicked = true;
   state.sliding = false;
-  return true;
+  return 'wallkick';
 }
 
 export function applySlideStart(state, dirX, dirZ) {
