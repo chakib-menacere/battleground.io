@@ -6,8 +6,18 @@ export class Net {
   }
 
   connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws`;
+    // Same-origin by default (local dev via the Vite proxy, or when the server also serves
+    // the built client). Set VITE_WS_URL at build time to point at a separately hosted server
+    // instead — needed when the client is deployed somewhere static-only, like GitHub Pages,
+    // which can't run the WebSocket server itself.
+    const configured = import.meta.env.VITE_WS_URL;
+    let url;
+    if (configured) {
+      url = configured;
+    } else {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      url = `${proto}://${location.host}/ws`;
+    }
     this.ws = new WebSocket(url);
 
     this.ws.addEventListener('open', () => this.handlers.onOpen?.());
