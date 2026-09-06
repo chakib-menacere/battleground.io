@@ -133,6 +133,22 @@
       #shop-hint.hidden { display: none; }
       #shop-hint b { color: #2fe0c4; }
 
+      #door-hint {
+        position: absolute; bottom: 30%; left: 50%; transform: translateX(-50%);
+        color: #fff; font: 600 15px system-ui, sans-serif; text-align: center;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.85); pointer-events: none; user-select: none;
+      }
+      #door-hint.hidden { display: none; }
+      #door-hint b { color: #2fe0c4; }
+      #door-progress-track {
+        margin: 8px auto 0; width: 140px; height: 6px; border-radius: 3px;
+        background: rgba(255,255,255,0.2); overflow: hidden;
+      }
+      #door-progress-fill {
+        height: 100%; width: 0%; background: #2fe0c4; border-radius: 3px;
+        transition: width 0.05s linear;
+      }
+
       #shop {
         position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
         background: rgba(4,8,10,0.72);
@@ -190,8 +206,12 @@
       </div>
       <div id="scoreboard"></div>
       <div id="killfeed"></div>
-      <div id="lobby-hint">Walk into the glowing portal to deploy into the battleground</div>
+      <div id="lobby-hint">Find the door and hold <b>E</b> to deploy into the battleground</div>
       <div id="shop-hint">Press <b>B</b> to open the shop</div>
+      <div id="door-hint">
+        Hold <b>E</b> to deploy
+        <div id="door-progress-track"><div id="door-progress-fill"></div></div>
+      </div>
       <div id="respawn">
         <div>You died</div>
         <div id="respawn-timer" style="font-size:14px; opacity:0.8;"></div>
@@ -217,8 +237,10 @@
           <div class="key"><b>Space</b> jump</div>
           <div class="key"><b>Ctrl/C</b> crouch &amp; slide</div>
           <div class="key"><b>R</b> reload</div>
+          <div class="key"><b>1/2</b> switch weapon/knife</div>
           <div class="key"><b>F4</b> third person</div>
           <div class="key"><b>B</b> shop (in lobby)</div>
+          <div class="key"><b>E</b> hold to deploy</div>
           <div class="key"><b>Esc</b> release cursor</div>
         </div>
       </div>

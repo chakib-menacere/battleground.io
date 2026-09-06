@@ -10,11 +10,11 @@ import {
   ARENA_HALF_SIZE,
   COVER_BOXES,
   SPAWN_POINTS,
-  LOBBY_CENTER,
-  LOBBY_HALF_SIZE,
   LOBBY_SPAWN_POINTS,
-  PORTAL_POSITION,
-  PORTAL_RADIUS,
+  DOOR_POSITION,
+  DOOR_RADIUS,
+  DOOR_GAP_HALF_WIDTH,
+  DOOR_HOLD_MS,
   SHOP_POSITION,
   SHOP_RADIUS,
   JUMP_PADS,
@@ -40,7 +40,7 @@ import {
   DEFAULT_SLOT,
   MSG,
 } from '../shared/constants.js';
-import { createMovementState, stepMovement, applyJump, applySlideStart, computeWorldDir } from '../shared/movement.js';
+import { createMovementState, stepMovement, attemptJump, applySlideStart, computeWorldDir, clampToWorld } from '../shared/movement.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8090;
@@ -87,6 +87,8 @@ class Player {
     this.activeSlot = DEFAULT_SLOT; // 'primary' (purchased gun) or 'secondary' (knife)
     this.lastShotAt = 0;
     this.lastStabAt = 0;
+    this.doorHolding = false;
+    this.doorHoldStart = 0;
     this.input = { forward: 0, right: 0, crouch: false };
     this.move = createMovementState();
     const startWeapon = SHOP_WEAPONS.find((w) => w.id === DEFAULT_WEAPON_ID);
@@ -126,20 +128,10 @@ function broadcast(msg, exceptId = null) {
   }
 }
 
-function clampToArena(pos) {
-  const m = ARENA_HALF_SIZE - 0.5;
-  pos.x = Math.max(-m, Math.min(m, pos.x));
-  pos.z = Math.max(-m, Math.min(m, pos.z));
-}
-
-function clampToLobby(pos) {
-  const m = LOBBY_HALF_SIZE - 0.5;
-  pos.x = Math.max(LOBBY_CENTER.x - m, Math.min(LOBBY_CENTER.x + m, pos.x));
-  pos.z = Math.max(LOBBY_CENTER.z - m, Math.min(LOBBY_CENTER.z + m, pos.z));
-}
-
 function enterArena(player) {
   player.inArena = true;
+  player.doorHolding = false;
+  player.doorHoldStart = 0;
   const spawn = randomSpawn();
   player.x = spawn.x;
   player.y = spawn.y;
@@ -151,13 +143,18 @@ function enterArena(player) {
 
 // Cover boxes, walls, and crates block horizontal movement below their top — but once you're
 // at or above that height (mantled onto one, or clearing it mid-jump), the same footprint no
-// longer blocks you, so you can stand and walk around on top.
+// longer blocks you, so you can stand and walk around on top. The arena's entrance door is a
+// permanent, full-height barrier with no such exception — it never becomes walk-through, since
+// "opening" it (holding E, see the tick loop) teleports you into the arena instead.
 function collidesWithCover(x, z, y, radius) {
   for (const box of COVER_BOXES) {
     const hx = box.sx / 2 + radius;
     const hz = box.sz / 2 + radius;
     if (Math.abs(x - box.x) < hx && Math.abs(z - box.z) < hz && y < box.sy - 0.05) return true;
   }
+  const doorHalfX = DOOR_GAP_HALF_WIDTH + radius;
+  const doorHalfZ = 0.5 + radius;
+  if (Math.abs(x - DOOR_POSITION.x) < doorHalfX && Math.abs(z - DOOR_POSITION.z) < doorHalfZ) return true;
   return false;
 }
 
@@ -214,7 +211,7 @@ wss.on('connection', (ws) => {
     } else if (msg.type === MSG.STAB) {
       handleStab(player);
     } else if (msg.type === MSG.JUMP) {
-      if (player.alive) applyJump(player.move);
+      if (player.alive) attemptJump(player.move, player.x, player.z);
     } else if (msg.type === MSG.SLIDE) {
       if (!player.alive) return;
       const { forward, right } = player.input;
@@ -233,6 +230,17 @@ wss.on('connection', (ws) => {
       player.activeSlot = slot;
       player.reloading = false;
       send(player.ws, { type: MSG.SWITCH, slot });
+    } else if (msg.type === MSG.INTERACT) {
+      if (player.inArena) return; // the door's the only interactable, and it's only in the lobby
+      if (msg.holding) {
+        const nearDoor = Math.hypot(player.x - DOOR_POSITION.x, player.z - DOOR_POSITION.z) < DOOR_RADIUS;
+        if (!nearDoor) return;
+        player.doorHolding = true;
+        player.doorHoldStart = Date.now();
+      } else {
+        player.doorHolding = false;
+        send(player.ws, { type: MSG.DOOR_PROGRESS, progress: 0 });
+      }
     }
   });
 
@@ -452,12 +460,19 @@ const dtMs = 1000 / TICK_RATE;
 setInterval(() => {
   for (const p of players.values()) {
     if (!p.alive) continue;
-    stepMovement(p.move, p, { forward: p.input.forward, right: p.input.right, crouch: p.input.crouch, yaw: p.yaw }, dtMs, collidesWithCover, p.inArena ? clampToArena : clampToLobby);
+    stepMovement(p.move, p, { forward: p.input.forward, right: p.input.right, crouch: p.input.crouch, yaw: p.yaw }, dtMs, collidesWithCover, clampToWorld);
 
     if (!p.inArena) {
-      const dx = p.x - PORTAL_POSITION.x;
-      const dz = p.z - PORTAL_POSITION.z;
-      if (Math.hypot(dx, dz) < PORTAL_RADIUS) enterArena(p);
+      const nearDoor = Math.hypot(p.x - DOOR_POSITION.x, p.z - DOOR_POSITION.z) < DOOR_RADIUS;
+      if (p.doorHolding && nearDoor) {
+        const heldMs = Date.now() - p.doorHoldStart;
+        send(p.ws, { type: MSG.DOOR_PROGRESS, progress: Math.min(1, heldMs / DOOR_HOLD_MS) });
+        if (heldMs >= DOOR_HOLD_MS) enterArena(p);
+      } else if (p.doorHolding) {
+        // Walked out of range mid-hold — cancel and reset the client's progress bar.
+        p.doorHolding = false;
+        send(p.ws, { type: MSG.DOOR_PROGRESS, progress: 0 });
+      }
     } else if (p.move.grounded) {
       for (const pad of JUMP_PADS) {
         const dx = p.x - pad.x;

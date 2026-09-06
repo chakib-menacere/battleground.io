@@ -6,8 +6,9 @@ import {
   COVER_BOXES as CLIENT_COVER,
   LOBBY_CENTER,
   LOBBY_HALF_SIZE,
-  PORTAL_POSITION,
-  PORTAL_RADIUS,
+  DOOR_POSITION,
+  DOOR_RADIUS,
+  DOOR_GAP_HALF_WIDTH,
   SHOP_POSITION,
   SHOP_RADIUS,
   JUMP_PADS,
@@ -26,7 +27,7 @@ import {
   SLIDE_MIN_INPUT,
   MSG,
 } from '../shared/constants.js';
-import { createMovementState, stepMovement, applyJump, applySlideStart, computeWorldDir } from '../shared/movement.js';
+import { createMovementState, stepMovement, attemptJump, applySlideStart, computeWorldDir, clampToWorld } from '../shared/movement.js';
 
 const app = document.getElementById('app');
 const overlay = document.getElementById('overlay');
@@ -47,6 +48,8 @@ const shopEl = document.getElementById('shop');
 const shopItemsEl = document.getElementById('shop-items');
 const shopCloseEl = document.getElementById('shop-close');
 const damageFlashEl = document.getElementById('damage-flash');
+const doorHintEl = document.getElementById('door-hint');
+const doorProgressFillEl = document.getElementById('door-progress-fill');
 
 let damageFlashTimeout = null;
 function flashDamage() {
@@ -61,6 +64,21 @@ function flashDamage() {
 let shopData = null; // { weapons, armorCost, position, radius } from INIT
 let shopOpen = false;
 let nearShop = false;
+
+// ---------- Door (hold E to deploy) ----------
+let nearDoor = false;
+let doorHolding = false;
+function startDoorHold() {
+  if (doorHolding || !nearDoor || inArena || !alive) return;
+  doorHolding = true;
+  net.send({ type: MSG.INTERACT, holding: true });
+}
+function stopDoorHold() {
+  if (!doorHolding) return;
+  doorHolding = false;
+  doorProgressFillEl.style.width = '0%';
+  net.send({ type: MSG.INTERACT, holding: false });
+}
 
 function buildShopUI(shop) {
   shopData = shop;
@@ -286,15 +304,29 @@ scene.add(ground);
 // Boundary walls (thin, just to make edges visible)
 const wallMat = new THREE.MeshStandardMaterial({ color: 0xdcd3bf, roughness: 0.85 });
 const wallHeight = 4;
-[
-  [0, -ARENA_HALF_SIZE, groundSize, 1],
-  [0, ARENA_HALF_SIZE, groundSize, 1],
-].forEach(([x, z, w, d]) => {
-  const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallHeight, d), wallMat);
-  wall.position.set(x, wallHeight / 2, z);
+
+// North wall: one solid span.
+{
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(groundSize, wallHeight, 1), wallMat);
+  wall.position.set(0, wallHeight / 2, ARENA_HALF_SIZE);
   wall.castShadow = true;
   scene.add(wall);
-});
+}
+
+// South wall: split around the door gap instead of one solid span.
+{
+  const doorSpan = DOOR_GAP_HALF_WIDTH * 2;
+  const sideWidth = (groundSize - doorSpan) / 2;
+  [
+    [-(doorSpan / 2 + sideWidth / 2), sideWidth],
+    [doorSpan / 2 + sideWidth / 2, sideWidth],
+  ].forEach(([x, w]) => {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallHeight, 1), wallMat);
+    wall.position.set(x, wallHeight / 2, -ARENA_HALF_SIZE);
+    wall.castShadow = true;
+    scene.add(wall);
+  });
+}
 [
   [-ARENA_HALF_SIZE, 0, 1, groundSize],
   [ARENA_HALF_SIZE, 0, 1, groundSize],
@@ -317,10 +349,9 @@ lobbyGround.position.set(LOBBY_CENTER.x, 0.01, LOBBY_CENTER.z);
 lobbyGround.receiveShadow = true;
 scene.add(lobbyGround);
 
-// A connecting walkway between the arena wall and the (now far-off) lobby so the gap reads
-// as "a long walk to deployment" rather than a void — players can't actually reach it either
-// way (both zones clamp movement to their own bounds), it's purely so the world looks
-// intentional when you glance in that direction from either end.
+// A connecting walkway between the arena wall and the lobby — a real, walkable corridor (see
+// clampToWorld in shared/movement.js), not just a cosmetic backdrop. The door at its arena end
+// is the only thing actually gating entry.
 const walkwayNearZ = -ARENA_HALF_SIZE;
 const walkwayFarZ = LOBBY_CENTER.z + LOBBY_HALF_SIZE;
 const walkwayLength = walkwayNearZ - walkwayFarZ;
@@ -334,26 +365,49 @@ walkway.position.set(0, 0.005, (walkwayNearZ + walkwayFarZ) / 2);
 walkway.receiveShadow = true;
 scene.add(walkway);
 
-const portalGroup = new THREE.Group();
-portalGroup.position.set(PORTAL_POSITION.x, 0, PORTAL_POSITION.z);
-const portalRing = new THREE.Mesh(
-  new THREE.TorusGeometry(PORTAL_RADIUS, 0.16, 16, 40),
-  new THREE.MeshStandardMaterial({ color: 0x35e0ff, emissive: 0x0fb8d9, emissiveIntensity: 1.4, roughness: 0.3 })
-);
-portalRing.rotation.x = Math.PI / 2;
-portalRing.position.y = PORTAL_POSITION.y + 0.9;
-portalGroup.add(portalRing);
-const portalDisc = new THREE.Mesh(
-  new THREE.CircleGeometry(PORTAL_RADIUS - 0.1, 40),
-  new THREE.MeshBasicMaterial({ color: 0x35e0ff, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
-);
-portalDisc.rotation.x = Math.PI / 2;
-portalDisc.position.y = PORTAL_POSITION.y + 0.9;
-portalGroup.add(portalDisc);
-const portalLight = new THREE.PointLight(0x35e0ff, 3, 10);
-portalLight.position.y = PORTAL_POSITION.y + 0.9;
-portalGroup.add(portalLight);
-scene.add(portalGroup);
+// The entrance door: a frame filling the gap in the south wall, plus two panels that swing
+// open when a hold-E interaction completes (see MSG.ENTER handling below). Purely cosmetic —
+// entry itself is a teleport to a random arena spawn, same as the portal it replaced.
+const doorGroup = new THREE.Group();
+doorGroup.position.set(DOOR_POSITION.x, 0, DOOR_POSITION.z);
+scene.add(doorGroup);
+
+const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x2b2f26, roughness: 0.5, metalness: 0.4 });
+const doorPanelMat = new THREE.MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.6, metalness: 0.3 });
+const doorAccentMat = new THREE.MeshStandardMaterial({ color: 0x2fe0c4, emissive: 0x1a8f7d, emissiveIntensity: 1.1, roughness: 0.4 });
+
+const doorSpanWidth = DOOR_GAP_HALF_WIDTH * 2;
+const doorHeight = wallHeight;
+[-1, 1].forEach((side) => {
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.4, doorHeight, 0.6), doorFrameMat);
+  post.position.set(side * (doorSpanWidth / 2 + 0.2), doorHeight / 2, 0);
+  post.castShadow = true;
+  doorGroup.add(post);
+});
+const lintel = new THREE.Mesh(new THREE.BoxGeometry(doorSpanWidth + 0.8, 0.4, 0.6), doorFrameMat);
+lintel.position.set(0, doorHeight, 0);
+doorGroup.add(lintel);
+const accentStrip = new THREE.Mesh(new THREE.BoxGeometry(doorSpanWidth + 0.6, 0.08, 0.62), doorAccentMat);
+accentStrip.position.set(0, doorHeight - 0.3, 0);
+doorGroup.add(accentStrip);
+
+const doorPanels = [-1, 1].map((side) => {
+  const pivot = new THREE.Group();
+  pivot.position.set(side * 0.2, 0, 0); // hinge at the frame post, panel swings outward
+  doorGroup.add(pivot);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(doorSpanWidth / 2 - 0.2, doorHeight - 0.4, 0.15), doorPanelMat);
+  panel.position.set(side * (doorSpanWidth / 4 - 0.1), (doorHeight - 0.4) / 2, 0);
+  panel.castShadow = true;
+  pivot.add(panel);
+  return pivot;
+});
+
+const doorLight = new THREE.PointLight(0x2fe0c4, 1.5, 8);
+doorLight.position.set(0, 2, 0.5);
+doorGroup.add(doorLight);
+
+let doorOpenAmount = 0;
+let doorOpenTarget = 0; // set to 1 whenever anyone deploys; decays back to 0 on its own
 
 // Low perimeter wall with a glowing teal trim, enclosing the lobby platform.
 const lobbyWallMat = new THREE.MeshStandardMaterial({ color: 0x1b2426, roughness: 0.7 });
@@ -1084,6 +1138,11 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  if (e.code === 'KeyE' && started && !shopOpen) {
+    startDoorHold();
+    return;
+  }
+
   if (!alive || !started || shopOpen) return;
   if (e.code === 'Space') {
     tryJump();
@@ -1097,7 +1156,10 @@ window.addEventListener('keydown', (e) => {
     trySwitchSlot('secondary');
   }
 });
-window.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('keyup', (e) => {
+  keys.delete(e.code);
+  if (e.code === 'KeyE') stopDoorHold();
+});
 
 // Pointer Lock is a nice-to-have (captures + hides the cursor) but some embedding contexts
 // (iframes, sandboxed previews) block it outright. Gameplay must not depend on it succeeding —
@@ -1110,12 +1172,11 @@ overlay.addEventListener('click', () => {
   renderer.domElement.requestPointerLock?.().catch(() => {});
 });
 
-document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === renderer.domElement;
-  if (!locked && started) {
-    // Lock was lost (e.g. Escape) while playing — treat it like the player paused.
-    started = false;
-    overlay.classList.remove('hidden');
+// Clicking back into the game while it's already running (mouse just isn't captured — e.g.
+// after Escape) should silently re-lock the cursor, not reopen the deploy overlay.
+window.addEventListener('mousedown', (e) => {
+  if (started && e.button === 0 && document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock?.().catch(() => {});
   }
 });
 
@@ -1125,13 +1186,13 @@ window.addEventListener('keydown', (e) => {
     setShopOpen(false);
     return;
   }
-  started = false;
-  overlay.classList.remove('hidden');
+  // Just release the cursor — gameplay keeps running, no "click to deploy" overlay.
   if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
 });
 
 window.addEventListener('mousemove', (e) => {
   if (!started || shopOpen) return;
+  if (document.pointerLockElement !== renderer.domElement) return; // cursor unlocked (Escape) — don't spin the camera
   yaw -= e.movementX * 0.0022;
   pitch -= e.movementY * 0.0022;
   pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch));
@@ -1139,6 +1200,9 @@ window.addEventListener('mousemove', (e) => {
 
 window.addEventListener('mousedown', (e) => {
   if (!started || shopOpen) return;
+  // If the cursor isn't locked, this click is re-locking it (see the listener above), not
+  // firing — otherwise clicking back into the game after Escape would also shoot.
+  if (document.pointerLockElement !== renderer.domElement) return;
   if (e.button === 0) tryShoot();
   else if (e.button === 2) tryStab();
 });
@@ -1204,8 +1268,8 @@ const scores = new Map(); // id -> { name, kills, deaths }
 let lastShotAt = 0;
 
 function tryJump() {
-  if (moveState.grounded && !moveState.sliding) {
-    applyJump(moveState);
+  if (moveState.sliding) return;
+  if (attemptJump(moveState, self.x, self.z)) {
     net.send({ type: MSG.JUMP });
   }
 }
@@ -1427,6 +1491,7 @@ const net = new Net({
         break;
       }
       case MSG.ENTER: {
+        doorOpenTarget = 1;
         if (msg.id === selfId) {
           self.x = msg.x;
           self.y = msg.y;
@@ -1478,6 +1543,10 @@ const net = new Net({
       }
       case MSG.CRATE: {
         setCrateActive(msg.id, msg.active);
+        break;
+      }
+      case MSG.DOOR_PROGRESS: {
+        doorProgressFillEl.style.width = `${msg.progress * 100}%`;
         break;
       }
       case MSG.SWITCH: {
@@ -1565,19 +1634,10 @@ function collidesWithCover(x, z, y, radius) {
     const hz = box.sz / 2 + radius;
     if (Math.abs(x - box.x) < hx && Math.abs(z - box.z) < hz && y < box.sy - 0.05) return true;
   }
+  const doorHalfX = DOOR_GAP_HALF_WIDTH + radius;
+  const doorHalfZ = 0.5 + radius;
+  if (Math.abs(x - DOOR_POSITION.x) < doorHalfX && Math.abs(z - DOOR_POSITION.z) < doorHalfZ) return true;
   return false;
-}
-
-function clampToArena(pos) {
-  const m = ARENA_HALF_SIZE - 0.5;
-  pos.x = Math.max(-m, Math.min(m, pos.x));
-  pos.z = Math.max(-m, Math.min(m, pos.z));
-}
-
-function clampToLobby(pos) {
-  const m = LOBBY_HALF_SIZE - 0.5;
-  pos.x = Math.max(LOBBY_CENTER.x - m, Math.min(LOBBY_CENTER.x + m, pos.x));
-  pos.z = Math.max(LOBBY_CENTER.z - m, Math.min(LOBBY_CENTER.z + m, pos.z));
 }
 
 let inputSendAccum = 0;
@@ -1594,7 +1654,7 @@ function updateMovement(dt) {
     crouch = CROUCH_KEYS.some((k) => keys.has(k));
   }
 
-  stepMovement(moveState, self, { forward, right, yaw, crouch }, dt * 1000, collidesWithCover, inArena ? clampToArena : clampToLobby);
+  stepMovement(moveState, self, { forward, right, yaw, crouch }, dt * 1000, collidesWithCover, clampToWorld);
 
   if (inArena && moveState.grounded) {
     for (const pad of JUMP_PADS) {
@@ -1613,6 +1673,15 @@ function updateMovement(dt) {
   } else {
     nearShop = false;
     shopHintEl.classList.add('hidden');
+  }
+
+  if (!inArena) {
+    nearDoor = Math.hypot(self.x - DOOR_POSITION.x, self.z - DOOR_POSITION.z) < DOOR_RADIUS;
+    doorHintEl.classList.toggle('hidden', !nearDoor || shopOpen);
+    if (!nearDoor && doorHolding) stopDoorHold();
+  } else {
+    nearDoor = false;
+    doorHintEl.classList.add('hidden');
   }
 
   const crouchedPose = moveState.crouching || moveState.sliding;
@@ -1708,8 +1777,13 @@ function animate() {
     updateCharacterPose(rp.mesh, rp, dt, rp.crouching, rp.sliding, rp.isMoving);
   }
 
-  portalGroup.rotation.y += dt * 0.6;
-  portalRing.rotation.z += dt * 0.4;
+  // Door swings open toward doorOpenTarget (set to 1 briefly whenever anyone deploys, see the
+  // ENTER handler) and eases back shut on its own.
+  doorOpenTarget = Math.max(0, doorOpenTarget - dt * 0.6);
+  doorOpenAmount += (Math.min(1, doorOpenTarget) - doorOpenAmount) * Math.min(1, dt * 6);
+  doorPanels[0].rotation.y = doorOpenAmount * 1.4;
+  doorPanels[1].rotation.y = -doorOpenAmount * 1.4;
+  doorLight.intensity = 1.5 + doorOpenAmount * 2;
 
   padPulse += dt * 3;
   const padScale = 1 + Math.sin(padPulse) * 0.06;

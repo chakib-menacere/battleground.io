@@ -37,6 +37,15 @@ export const GROUND_Y = 1; // baseline feet height used by spawn points and grav
 export const GRAVITY = -20; // units/sec^2
 export const JUMP_VELOCITY = 7.5;
 
+// Wall kick: pressing jump again while airborne and close to a wall (instead of only working
+// on the ground) launches you up and away from it, like a Titanfall-style wall jump. Limited
+// to one per airflight (see movementState.wallKicked) so it's a deliberate double-jump-off-a-
+// wall, not an infinite ricochet between two walls.
+export const WALLKICK_RANGE = 0.9;
+export const WALLKICK_UP_VELOCITY = 7;
+export const WALLKICK_PUSH_SPEED = 9;
+export const WALLKICK_DRAG = 4; // per-second exponential decay of the outward shove
+
 // How close (in world units) the player's height must already be to a surface's top before
 // getGroundLevel() will snap them onto it — see shared/movement.js. A normal jump's apex is
 // ~1.4 units above GROUND_Y, so this lets a jump mantle the cover boxes (up to ~2.4 tall)
@@ -95,10 +104,10 @@ export const SPAWN_POINTS = [
   { x: -32, y: 1, z: 0 },
 ];
 
-// Players spawn in a safe lobby, well clear of the arena's walled boundary (a good long walk
-// of open ground separates the two), and must walk into the portal to deploy. The per-zone
-// clamp (see clampToLobby/clampToArena) keeps lobby players from ever reaching the arena on
-// foot regardless of the gap — the portal teleport is the only way in.
+// Players spawn in a safe lobby, well clear of the arena's walled boundary, connected to it by
+// a single walkable corridor (see CORRIDOR_HALF_WIDTH and clampToWorld in movement.js) — one
+// continuous space, no invisible teleport-only barrier. A door in the arena's south wall, at
+// the corridor's end, is the only way through: hold E near it (see DOOR_HOLD_MS) to deploy.
 export const LOBBY_CENTER = { x: 0, z: -115 };
 export const LOBBY_HALF_SIZE = 8;
 
@@ -110,10 +119,14 @@ export const LOBBY_SPAWN_POINTS = [
   { x: 0, y: 1, z: -120 },
 ];
 
-export const PORTAL_POSITION = { x: 0, y: 1.1, z: -109 };
-export const PORTAL_RADIUS = 1.8;
+export const CORRIDOR_HALF_WIDTH = 5; // the walkway's half-width, connecting lobby to arena
 
-// The shop kiosk sits in the lobby, off to the side of the spawn cluster and portal path.
+export const DOOR_POSITION = { x: 0, y: 1.1, z: -ARENA_HALF_SIZE };
+export const DOOR_RADIUS = 2.5;
+export const DOOR_GAP_HALF_WIDTH = 3; // the opening left in the arena's south wall for it
+export const DOOR_HOLD_MS = 900;
+
+// The shop kiosk sits in the lobby, off to the side of the spawn cluster and the corridor to the door.
 // Buying is proximity-gated to standing near it (see SHOP_RADIUS), not a global menu.
 export const SHOP_POSITION = { x: -6, z: -115 };
 export const SHOP_RADIUS = 3;
@@ -176,4 +189,6 @@ export const MSG = {
   STAB: 'stab',
   BACKSTAB: 'backstab',
   CRATE: 'crate',
+  INTERACT: 'interact',
+  DOOR_PROGRESS: 'doorProgress',
 };
