@@ -1185,7 +1185,7 @@ let started = false;
 overlay.addEventListener('click', () => {
   started = true;
   overlay.classList.add('hidden');
-  renderer.domElement.requestPointerLock?.().catch(() => {});
+  if (!isTouchDevice) renderer.domElement.requestPointerLock?.().catch(() => {});
 });
 
 // Escape releases the cursor without pausing the game (see below) — tracked here rather than
@@ -1235,6 +1235,178 @@ window.addEventListener('mousedown', (e) => {
 window.addEventListener('contextmenu', (e) => {
   if (started) e.preventDefault(); // right-click is the knife backstab, not a browser menu
 });
+
+// ---------- Touch controls (mobile) ----------
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+if (isTouchDevice) document.body.classList.add('touch');
+
+let touchForward = 0;
+let touchRight = 0;
+
+const touchMoveZone = document.getElementById('touch-move-zone');
+const touchLookZone = document.getElementById('touch-look-zone');
+const joystickBase = document.getElementById('touch-joystick-base');
+const joystickKnob = document.getElementById('touch-joystick-knob');
+
+const JOYSTICK_RADIUS = 55;
+let moveTouchId = null;
+let joystickOriginX = 0;
+let joystickOriginY = 0;
+
+function onMoveTouchStart(e) {
+  if (moveTouchId !== null || !started) return;
+  const t = e.changedTouches[0];
+  moveTouchId = t.identifier;
+  joystickOriginX = t.clientX;
+  joystickOriginY = t.clientY;
+  joystickBase.style.left = `${t.clientX - JOYSTICK_RADIUS}px`;
+  joystickBase.style.top = `${t.clientY - JOYSTICK_RADIUS}px`;
+  joystickBase.classList.add('active');
+  e.preventDefault();
+}
+function onMoveTouchMove(e) {
+  for (const t of e.changedTouches) {
+    if (t.identifier !== moveTouchId) continue;
+    let dx = t.clientX - joystickOriginX;
+    let dy = t.clientY - joystickOriginY;
+    const dist = Math.hypot(dx, dy);
+    if (dist > JOYSTICK_RADIUS) {
+      dx = (dx / dist) * JOYSTICK_RADIUS;
+      dy = (dy / dist) * JOYSTICK_RADIUS;
+    }
+    joystickKnob.style.left = `${30 + dx}px`;
+    joystickKnob.style.top = `${30 + dy}px`;
+    touchRight = dx / JOYSTICK_RADIUS;
+    touchForward = -dy / JOYSTICK_RADIUS;
+    e.preventDefault();
+  }
+}
+function onMoveTouchEnd(e) {
+  for (const t of e.changedTouches) {
+    if (t.identifier !== moveTouchId) continue;
+    moveTouchId = null;
+    touchForward = 0;
+    touchRight = 0;
+    joystickBase.classList.remove('active');
+    joystickKnob.style.left = '30px';
+    joystickKnob.style.top = '30px';
+  }
+}
+touchMoveZone.addEventListener('touchstart', onMoveTouchStart);
+touchMoveZone.addEventListener('touchmove', onMoveTouchMove);
+touchMoveZone.addEventListener('touchend', onMoveTouchEnd);
+touchMoveZone.addEventListener('touchcancel', onMoveTouchEnd);
+
+// Dragging anywhere in the look zone rotates the camera, same axes as mouse look. A short,
+// non-dragging tap fires instead (there's no separate mouse button to distinguish the two on
+// a touchscreen), matching the standard mobile-FPS convention.
+let lookTouchId = null;
+let lookLastX = 0;
+let lookLastY = 0;
+let lookTouchMoved = 0;
+const TOUCH_LOOK_SENSITIVITY = 0.0035;
+
+function onLookTouchStart(e) {
+  if (lookTouchId !== null || !started || shopOpen) return;
+  const t = e.changedTouches[0];
+  lookTouchId = t.identifier;
+  lookLastX = t.clientX;
+  lookLastY = t.clientY;
+  lookTouchMoved = 0;
+  e.preventDefault();
+}
+function onLookTouchMove(e) {
+  for (const t of e.changedTouches) {
+    if (t.identifier !== lookTouchId) continue;
+    const dx = t.clientX - lookLastX;
+    const dy = t.clientY - lookLastY;
+    lookLastX = t.clientX;
+    lookLastY = t.clientY;
+    lookTouchMoved += Math.abs(dx) + Math.abs(dy);
+    yaw -= dx * TOUCH_LOOK_SENSITIVITY;
+    pitch -= dy * TOUCH_LOOK_SENSITIVITY;
+    pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch));
+    e.preventDefault();
+  }
+}
+function onLookTouchEnd(e) {
+  for (const t of e.changedTouches) {
+    if (t.identifier !== lookTouchId) continue;
+    lookTouchId = null;
+    if (lookTouchMoved < 8) tryShoot(); // a tap, not a drag — fire
+  }
+}
+touchLookZone.addEventListener('touchstart', onLookTouchStart);
+touchLookZone.addEventListener('touchmove', onLookTouchMove);
+touchLookZone.addEventListener('touchend', onLookTouchEnd);
+touchLookZone.addEventListener('touchcancel', onLookTouchEnd);
+
+// On-screen action buttons — each just calls the same function a keyboard/mouse action would.
+function bindTouchButton(id, onDown, onUp) {
+  const el = document.getElementById(id);
+  el.addEventListener('touchstart', (e) => {
+    el.classList.add('pressed');
+    onDown();
+    e.preventDefault();
+  });
+  if (onUp) {
+    const release = () => { el.classList.remove('pressed'); onUp(); };
+    el.addEventListener('touchend', release);
+    el.addEventListener('touchcancel', release);
+  } else {
+    el.addEventListener('touchend', () => el.classList.remove('pressed'));
+  }
+}
+bindTouchButton('touch-jump-btn', () => tryJump());
+bindTouchButton('touch-crouch-btn', () => tryCrouchPress());
+bindTouchButton('touch-reload-btn', () => tryReload());
+bindTouchButton('touch-slot1-btn', () => trySwitchSlot('primary'));
+bindTouchButton('touch-slot2-btn', () => trySwitchSlot('secondary'));
+bindTouchButton('touch-shoot-btn', () => tryShoot());
+bindTouchButton('touch-stab-btn', () => tryStab());
+bindTouchButton('touch-interact-btn', () => startDoorHold(), () => stopDoorHold());
+
+// ---------- Gamepad (Xbox/PlayStation controllers via the browser Gamepad API) ----------
+// No connection events fire for stick/button state, so this is polled once per frame from
+// updateMovement rather than event-driven like keyboard/mouse/touch above.
+const gpPrevButtons = [];
+function pollGamepad(dt) {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const gp = pads && pads[0];
+  if (!gp || !gp.connected) return null;
+
+  const deadzone = 0.18;
+  const axis = (v) => (Math.abs(v) < deadzone ? 0 : v);
+  const forward = -axis(gp.axes[1] || 0);
+  const right = axis(gp.axes[0] || 0);
+  const lookX = axis(gp.axes[2] || 0);
+  const lookY = axis(gp.axes[3] || 0);
+  if (started && !shopOpen) {
+    yaw -= lookX * 2.5 * dt;
+    pitch -= lookY * 2.0 * dt;
+    pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch));
+  }
+
+  // Standard gamepad button mapping: 0=A/Cross 1=B/Circle 2=X/Square 3=Y/Triangle
+  // 4=LB/L1 5=RB/R1 6=LT/L2 7=RT/R2 9=Start/Options
+  const pressed = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
+  const wasPressed = (i) => !!gpPrevButtons[i];
+  const justPressed = (i) => pressed(i) && !wasPressed(i);
+
+  if (started && !shopOpen) {
+    if (justPressed(0)) tryJump();
+    if (justPressed(2)) tryReload();
+    if (justPressed(4)) trySwitchSlot('primary');
+    if (justPressed(5)) trySwitchSlot('secondary');
+    if (pressed(7)) tryShoot();
+    if (justPressed(6)) tryStab();
+    if (justPressed(3)) { if (nearDoor) startDoorHold(); }
+    else if (wasPressed(3) && !pressed(3)) stopDoorHold();
+  }
+  for (let i = 0; i < gp.buttons.length; i++) gpPrevButtons[i] = pressed(i);
+
+  return { forward, right, crouch: pressed(1) };
+}
 
 // ---------- Networked state ----------
 let selfId = null;
@@ -1697,6 +1869,19 @@ function updateMovement(dt) {
     if (keys.has('KeyD')) right += 1;
     if (keys.has('KeyA')) right -= 1;
     crouch = CROUCH_KEYS.some((k) => keys.has(k));
+
+    // Touch joystick and gamepad left stick feed the same forward/right axes as WASD — added
+    // rather than overriding, so whichever input source is actually in use just works.
+    forward += touchForward;
+    right += touchRight;
+    const gp = pollGamepad(dt);
+    if (gp) {
+      forward += gp.forward;
+      right += gp.right;
+      crouch = crouch || gp.crouch;
+    }
+    const len = Math.hypot(forward, right);
+    if (len > 1) { forward /= len; right /= len; }
   }
 
   stepMovement(moveState, self, { forward, right, yaw, crouch }, dt * 1000, collidesWithCover, clampToWorld);
@@ -1723,10 +1908,12 @@ function updateMovement(dt) {
   if (!inArena) {
     nearDoor = Math.hypot(self.x - DOOR_POSITION.x, self.z - DOOR_POSITION.z) < DOOR_RADIUS;
     doorHintEl.classList.toggle('hidden', !nearDoor || shopOpen);
+    document.body.classList.toggle('near-interact', nearDoor && !shopOpen);
     if (!nearDoor && doorHolding) stopDoorHold();
   } else {
     nearDoor = false;
     doorHintEl.classList.add('hidden');
+    document.body.classList.remove('near-interact');
   }
 
   const crouchedPose = moveState.crouching || moveState.sliding;

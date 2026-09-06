@@ -198,6 +198,72 @@
         letter-spacing: 2px; text-transform: uppercase; cursor: pointer;
       }
       #shop-close:hover { background: rgba(255,255,255,0.06); }
+
+      /* ---------- Touch controls (mobile) ---------- */
+      #touch-controls { position: absolute; inset: 0; display: none; }
+      body.touch #touch-controls { display: block; }
+      body.touch #crosshair { display: none; }
+
+      #touch-look-zone {
+        position: absolute; top: 0; right: 0; bottom: 0; left: 45%;
+        touch-action: none;
+      }
+      #touch-move-zone {
+        position: absolute; top: 0; left: 0; bottom: 0; width: 45%;
+        touch-action: none;
+      }
+      #touch-joystick-base {
+        position: absolute; width: 110px; height: 110px; border-radius: 50%;
+        background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.25);
+        display: none; pointer-events: none;
+      }
+      #touch-joystick-base.active { display: block; }
+      #touch-joystick-knob {
+        position: absolute; width: 50px; height: 50px; border-radius: 50%;
+        background: rgba(255,255,255,0.35); border: 1px solid rgba(255,255,255,0.5);
+        top: 30px; left: 30px; pointer-events: none;
+      }
+
+      #touch-buttons {
+        position: absolute; right: 14px; bottom: 100px; display: flex;
+        flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none;
+      }
+      .touch-btn-row { display: flex; gap: 10px; pointer-events: none; }
+      .touch-btn {
+        pointer-events: auto; touch-action: none; user-select: none;
+        display: flex; align-items: center; justify-content: center;
+        width: 60px; height: 60px; border-radius: 50%;
+        background: rgba(20,24,26,0.55); border: 1px solid rgba(255,255,255,0.25);
+        color: #fff; font: 700 11px system-ui, sans-serif; letter-spacing: 0.5px;
+      }
+      .touch-btn:active, .touch-btn.pressed { background: rgba(47,224,196,0.35); border-color: #2fe0c4; }
+      .touch-btn.big { width: 74px; height: 74px; font-size: 12px; }
+      .touch-btn.ghost { background: rgba(20,24,26,0.3); }
+
+      #touch-left-buttons {
+        position: absolute; left: 14px; bottom: 210px; display: flex; gap: 10px; pointer-events: none;
+      }
+      #touch-interact-btn {
+        position: absolute; left: 50%; bottom: 40%; transform: translateX(-50%);
+        display: none;
+      }
+      body.touch.near-interact #touch-interact-btn { display: flex; }
+
+      @media (max-width: 820px), (pointer: coarse) {
+        #hud { left: 10px; bottom: 10px; font-size: 14px; }
+        #ammo-hud { right: 10px; bottom: 10px; font-size: 20px; }
+        #slot-ui { right: 10px; bottom: 62px; }
+        #scoreboard { font-size: 12px; top: 10px; right: 10px; }
+        #shop-panel { width: 92vw; max-height: 85vh; overflow-y: auto; }
+        #overlay .brand { padding: 0 12px; }
+        #overlay h1 { font-size: 32px; letter-spacing: 3px; }
+        #overlay .controls { max-width: 92vw; gap: 6px; }
+        #overlay .key { font-size: 11px; padding: 4px 8px; }
+      }
+      /* Touch devices get their own control list — WASD/mouse/Esc don't apply. */
+      body.touch #overlay .controls .kb-only { display: none; }
+      #overlay .controls .touch-only { display: none; }
+      body.touch #overlay .controls .touch-only { display: block; }
     </style>
   </head>
   <body>
@@ -232,6 +298,27 @@
         <div>You died</div>
         <div id="respawn-timer" style="font-size:14px; opacity:0.8;"></div>
       </div>
+      <div id="touch-controls">
+        <div id="touch-move-zone"></div>
+        <div id="touch-look-zone"></div>
+        <div id="touch-joystick-base"><div id="touch-joystick-knob"></div></div>
+        <div id="touch-left-buttons">
+          <div class="touch-btn ghost" id="touch-jump-btn">JUMP</div>
+          <div class="touch-btn ghost" id="touch-crouch-btn">CROUCH</div>
+        </div>
+        <div class="touch-btn big" id="touch-interact-btn">E</div>
+        <div id="touch-buttons">
+          <div class="touch-btn-row">
+            <div class="touch-btn ghost" id="touch-slot1-btn">1</div>
+            <div class="touch-btn ghost" id="touch-slot2-btn">2</div>
+            <div class="touch-btn ghost" id="touch-reload-btn">R</div>
+          </div>
+          <div class="touch-btn-row">
+            <div class="touch-btn ghost" id="touch-stab-btn">STAB</div>
+            <div class="touch-btn big" id="touch-shoot-btn">FIRE</div>
+          </div>
+        </div>
+      </div>
       <div id="shop">
         <div id="shop-panel">
           <h2>ARMORY</h2>
@@ -247,18 +334,22 @@
         </div>
         <div class="deploy-prompt">Click to deploy</div>
         <div class="controls">
-          <div class="key"><b>WASD</b> move</div>
-          <div class="key"><b>Mouse</b> look</div>
-          <div class="key"><b>Click</b> shoot</div>
-          <div class="key"><b>Space</b> jump</div>
-          <div class="key"><b>Ctrl/C</b> crouch &amp; slide</div>
-          <div class="key"><b>R</b> reload</div>
-          <div class="key"><b>1/2</b> switch weapon/knife</div>
+          <div class="key kb-only"><b>WASD</b> move</div>
+          <div class="key kb-only"><b>Mouse</b> look</div>
+          <div class="key kb-only"><b>Click</b> shoot</div>
+          <div class="key kb-only"><b>Space</b> jump</div>
+          <div class="key kb-only"><b>Ctrl/C</b> crouch &amp; slide</div>
+          <div class="key kb-only"><b>R</b> reload</div>
+          <div class="key kb-only"><b>1/2</b> switch weapon/knife</div>
+          <div class="key kb-only"><b>Esc</b> release cursor</div>
+          <div class="key touch-only"><b>Joystick</b> move</div>
+          <div class="key touch-only"><b>Drag</b> look &middot; tap to fire</div>
+          <div class="key touch-only"><b>Buttons</b> jump / crouch / reload / switch</div>
           <div class="key"><b>F4</b> third person</div>
           <div class="key"><b>B</b> shop (in lobby)</div>
           <div class="key"><b>E</b> hold to deploy</div>
-          <div class="key"><b>Esc</b> release cursor</div>
         </div>
+        <div class="key" style="margin-top:8px; opacity:0.7;">Gamepad also supported — connect a controller and press any button</div>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>
