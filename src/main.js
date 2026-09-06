@@ -1172,10 +1172,18 @@ overlay.addEventListener('click', () => {
   renderer.domElement.requestPointerLock?.().catch(() => {});
 });
 
+// Escape releases the cursor without pausing the game (see below) — tracked here rather than
+// via actual pointer-lock state, because pointer lock is best-effort and some embedding
+// contexts (iframes, sandboxed previews) block it outright. Looking around still has to work
+// there via raw, unlocked mousemove deltas (as it always has), so this flag — not lock state —
+// is what actually gates rotation/firing; it only ever becomes true from an explicit Escape.
+let cursorReleased = false;
+
 // Clicking back into the game while it's already running (mouse just isn't captured — e.g.
 // after Escape) should silently re-lock the cursor, not reopen the deploy overlay.
 window.addEventListener('mousedown', (e) => {
-  if (started && e.button === 0 && document.pointerLockElement !== renderer.domElement) {
+  if (started && cursorReleased && e.button === 0) {
+    cursorReleased = false;
     renderer.domElement.requestPointerLock?.().catch(() => {});
   }
 });
@@ -1187,12 +1195,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   // Just release the cursor — gameplay keeps running, no "click to deploy" overlay.
+  cursorReleased = true;
   if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (!started || shopOpen) return;
-  if (document.pointerLockElement !== renderer.domElement) return; // cursor unlocked (Escape) — don't spin the camera
+  if (!started || shopOpen || cursorReleased) return;
   yaw -= e.movementX * 0.0022;
   pitch -= e.movementY * 0.0022;
   pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch));
@@ -1200,9 +1208,9 @@ window.addEventListener('mousemove', (e) => {
 
 window.addEventListener('mousedown', (e) => {
   if (!started || shopOpen) return;
-  // If the cursor isn't locked, this click is re-locking it (see the listener above), not
+  // If the cursor is released, this click is re-locking it (see the listener above), not
   // firing — otherwise clicking back into the game after Escape would also shoot.
-  if (document.pointerLockElement !== renderer.domElement) return;
+  if (cursorReleased) return;
   if (e.button === 0) tryShoot();
   else if (e.button === 2) tryStab();
 });
@@ -1236,7 +1244,10 @@ function updateSlotUI() {
   slotPrimaryEl.classList.toggle('active', activeSlot === 'primary');
   slotSecondaryEl.classList.toggle('active', activeSlot === 'secondary');
 }
-const self = { x: 0, y: 1, z: 0 };
+// Starts in the lobby, not the world origin (which sits in the middle of the arena) — this is
+// the position used until the server's INIT message arrives and corrects it, and the only
+// position ever used if there's no server at all (e.g. a static deployment with no backend).
+const self = { x: 0, y: 1, z: LOBBY_CENTER.z };
 const moveState = createMovementState();
 let eyeHeight = STAND_EYE_HEIGHT;
 
@@ -1703,7 +1714,7 @@ function updateMovement(dt) {
   } else {
     camera.position.set(self.x, self.y + eyeHeight, self.z);
   }
-  window.__dbg = { x: self.x, z: self.z, yaw, inArena, ammo, reserveAmmo, crates: [...ammoCrates.entries()].map(([id, c]) => ({ id, active: c.active, x: c.group.position.x, z: c.group.position.z })) };
+  window.__dbg = { x: self.x, z: self.z, yaw, inArena, ammo, reserveAmmo, alive, started, shopOpen, cursorReleased, keysHeld: [...keys], crates: [...ammoCrates.entries()].map(([id, c]) => ({ id, active: c.active, x: c.group.position.x, z: c.group.position.z })) };
 
   // Gun sway: idle bob while walking, kick-and-recover on recoil.
   const moving = (forward !== 0 || right !== 0) && moveState.grounded && !moveState.sliding;
