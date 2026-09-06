@@ -50,6 +50,7 @@ const shopCloseEl = document.getElementById('shop-close');
 const damageFlashEl = document.getElementById('damage-flash');
 const doorHintEl = document.getElementById('door-hint');
 const doorProgressFillEl = document.getElementById('door-progress-fill');
+const relockHintEl = document.getElementById('relock-hint');
 
 let damageFlashTimeout = null;
 function flashDamage() {
@@ -1199,6 +1200,7 @@ let cursorReleased = false;
 window.addEventListener('mousedown', (e) => {
   if (started && cursorReleased && e.button === 0) {
     cursorReleased = false;
+    relockHintEl.classList.remove('show');
     renderer.domElement.requestPointerLock?.().catch(() => {});
   }
 });
@@ -1211,6 +1213,7 @@ window.addEventListener('keydown', (e) => {
   }
   // Just release the cursor — gameplay keeps running, no "click to deploy" overlay.
   cursorReleased = true;
+  relockHintEl.classList.add('show');
   if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
 });
 
